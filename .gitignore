@@ -1,0 +1,5 @@
+log.txt
+__pycache__
+node_modules/
+*.map
+ui/templates/dist/**/*.hot-update.js*

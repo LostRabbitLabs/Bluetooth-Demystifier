@@ -1,0 +1,64 @@
+{
+  "name": "bluetooth-demystifier-ui",
+  "version": "1.0.0",
+  "description": "The UI Frontend for Bluetooth Demystifier",
+  "repository": {
+    "type": "git",
+    "url": "https://gitlab.com/lost-rabbit-labs/bltrabbit.git"
+  },
+  "private": false,
+  "license": "MIT",
+  "author": "Lost Rabbit",
+  "scripts": {
+    "start": "node app.js",
+    "lint": "eslint \"ui/react/**/*.{js,jsx}\"",
+    "lint-staged": "lint-staged",
+    "webpack": "NODE_ENV=production webpack --mode production",
+    "dev": "webpack serve --hot --mode='development' --devtool source-map"
+  },
+  "lint-staged": {
+    "ui/react/**/*.{js,jsx}": "eslint"
+  },
+  "pre-commit": "lint-staged",
+  "devDependencies": {
+    "@babel/core": "^7.16.7",
+    "@babel/eslint-parser": "^7.15.8",
+    "@babel/preset-env": "^7.12.1",
+    "@babel/preset-react": "^7.12.5",
+    "@emotion/react": "^11.7.1",
+    "@emotion/styled": "^11.6.0",
+    "@mui/icons-material": "^5.2.4",
+    "@mui/material": "^5.2.3",
+    "@mui/styled-engine": "^5.2.0",
+    "@mui/styles": "^5.2.3",
+    "@webpack-cli/serve": "^1.1.0",
+    "axios": "^0.21.1",
+    "babel-loader": "^8.1.0",
+    "css-loader": "^5.0.1",
+    "eslint": "^7.32.0",
+    "eslint-plugin-chai-friendly": "^0.7.2",
+    "eslint-plugin-import": "^2.24.2",
+    "eslint-plugin-react": "^7.26.1",
+    "json2csv": "^5.0.6",
+    "lint-staged": "^10.5.1",
+    "lodash": "^4.17.21",
+    "luxon": "^2.2.0",
+    "pre-commit": "^1.2.2",
+    "prop-types": "^15.7.2",
+    "react": "^17.0.2",
+    "react-dom": "^17.0.1",
+    "react-hot-loader": "^4.13.0",
+    "react-vis": "^1.11.7",
+    "sass": "^1.29.0",
+    "sass-loader": "^10.0.5",
+    "style-loader": "^2.0.0",
+    "styled-components": "^5.3.0",
+    "webpack": "^5.65.0",
+    "webpack-cli": "^4.9.1",
+    "webpack-dev-server": "^4.6.0"
+  },
+  "engines": {
+    "node": ">=10.19.0",
+    "npm": ">=6.13.4"
+  }
+}
