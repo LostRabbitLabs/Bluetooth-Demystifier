@@ -19,6 +19,8 @@ import Brightness4Icon from '@mui/icons-material/Brightness4';
 import Brightness7Icon from '@mui/icons-material/Brightness7';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import CircularProgress from '@mui/material/CircularProgress';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 
 import { useTheme } from '@mui/material/styles';
 
@@ -39,6 +41,7 @@ export const Header = ({
   const [adapter, setAdapter] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
   const [exporting, setExporting] = React.useState(false);
+  const [transport, setTransport] = React.useState('auto');
   const menuOpen = Boolean(anchor);
 
   const exportDataCSV = (d) => {
@@ -142,6 +145,7 @@ export const Header = ({
     window.adapterLoading = true;
     return axios.get(`/api/adapter`).then((res) => {
       setAdapter(res.data);
+      setTransport(res.data.transport);
       window.adapterLoading = false;
     }).catch((err) => {
       console.error(err);
@@ -168,6 +172,18 @@ export const Header = ({
       console.error(err);
     });
   }
+
+  const changeTransport = (e, v) => {
+    axios.post('/api/adapter/transport', {
+      'transport': v
+    }).then((res) => {
+      if (res.data.success) {
+        setTransport(v);
+      }
+    }).catch((err) => {
+      console.error(err);
+    })
+  };
 
   React.useEffect(() => {
     clearInterval(window.adapterTicker);
@@ -232,7 +248,6 @@ export const Header = ({
               </IconButton>
             )}
 
-
             <FormControlLabel
               label={adapter.Discovering ? 'Scanning' : 'Scan Off'}
               control={
@@ -243,6 +258,20 @@ export const Header = ({
                 />
               }
             />
+
+            <ToggleButtonGroup
+              size='small'
+              color='primary'
+              value={transport}
+              exclusive
+              onChange={changeTransport}
+              sx={{ '> button': { width: '70px'} }}
+            >
+              <ToggleButton value='bredr'>BR/EDR</ToggleButton>
+              <ToggleButton value='auto'>Auto</ToggleButton>
+              <ToggleButton value='le'>LE</ToggleButton>
+            </ToggleButtonGroup>
+
             <IconButton onClick={colorMode.toggleColorMode}>
               {theme.palette.mode === 'dark' ? <Brightness4Icon /> : <Brightness7Icon />}
             </IconButton>
@@ -259,7 +288,10 @@ export const Header = ({
 };
 
 Header.propTypes = {
-  lastQuery: PropTypes.string,
+  lastQuery: PropTypes.oneOfType([
+    PropTypes.object,
+    PropTypes.string,
+  ]),
   polling: PropTypes.bool,
   setPolling: PropTypes.func,
   pollingEnabled: PropTypes.bool,

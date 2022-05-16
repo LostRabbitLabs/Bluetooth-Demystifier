@@ -66,6 +66,11 @@ Currently there is no authentication on the API.
 
 `GET /api/adapter/scan/off` Stops the bluethooth adapters discovery.
 
+`GET /api/adapter/transport` Returns the Discovery Transport
+
+`POST /api/adapter/transport`
+* transport (Required) - String Enum of [bredr, auto, le]
+
 `GET /api/query` Returns all mac addresses.
 * count (Optional) - Integer
   * Returns top seen devices
