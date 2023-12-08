@@ -2,3 +2,4 @@ SQLAlchemy==1.4.29
 Flask==2.0.2
 psycopg2==2.9.3
 PyGObject==3.42.0
+Werkzeug==2.2.2
