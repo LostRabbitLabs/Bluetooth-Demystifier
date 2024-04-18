@@ -1,6 +1,8 @@
 # Bluetooth Demystifier
 Bluetooth Demystifier is a visual into the world of Bluetooth/BLE devices.
 
+![Screenshot](/ui/templates/dist/img/btdm_demo.png?raw=true "Bluetooth Demystifier Screenshot")
+
 [[_TOC_]]
 
 ---
@@ -23,30 +25,25 @@ Bluetooth Demystifier is a visual into the world of Bluetooth/BLE devices.
 ## Kali2022/Parrot OS/Raspberian (Raspberry Pi) Setup
 Follow these instructions to get this code running on modern Debian based distros.
 
-> This should work on any newer Debian based system as long as `pip` is linked to `python3` properly.
+> This should work on any newer Debian based system.
 
 ### System Dependencies
 ```
-sudo apt install postgresql pkg-config libcairo2-dev libgirepository1.0-dev libpq-dev python3-dev python3-pip
-```
-
-### Pip Dependencies
-```
-sudo pip install -r requirements.txt
+sudo apt install postgresql pkg-config libcairo2-dev libgirepository1.0-dev libpq-dev python3-dev python3-pip python3-sqlalchemy python3-flask python3-psycopg2 python3-gi
 ```
 
 ### PostgreSQL Setup
 The `prep.sh` script will create the database, user, and load up the database with the OUI/category and UUID lookup information.
 
 ```
-sudo ./prep.sh
+sudo ./scripts/prep.sh
 ```
 
 ### Running
 This will start the Flask API/UI server and setup the DBus signals to ingest bluetooth data.
 
 ```
-sudo ./init.sh
+sudo ./scripts/init.sh
 ```
 
 ### Web Interface
@@ -65,6 +62,11 @@ Currently there is no authentication on the API.
 `GET /api/adapter/scan/on` Starts the bluetooth adapter's StartDiscovery() method.
 
 `GET /api/adapter/scan/off` Stops the bluethooth adapters discovery.
+
+`GET /api/adapter/transport` Returns the Discovery Transport
+
+`POST /api/adapter/transport`
+* transport (Required) - String Enum of [bredr, auto, le]
 
 `GET /api/query` Returns all mac addresses.
 * count (Optional) - Integer

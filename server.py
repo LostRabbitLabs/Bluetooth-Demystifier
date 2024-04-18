@@ -7,9 +7,10 @@ from sqlalchemy import tablesample, delete
 from sqlalchemy.sql.expression import func
 from sqlalchemy.orm import aliased
 from sqlalchemy.orm.session import sessionmaker
-from inc.bt import adapter, manager, loop
-from inc.util import macs2json, macToDBusPath, getDeviceForMac, macsAndPresence2json, getQueryCount, safeCommit
-from inc.models import Mac, OUID, Data, RSSI, engine, Presence
+from backend.bt import adapter, manager, loop
+from backend.util import macs2json, macToDBusPath, getDeviceForMac, macsAndPresence2json, getQueryCount, safeCommit
+from backend.models import Mac, OUID, Data, RSSI, engine, Presence
+from gi.repository import GLib
 
 Session = sessionmaker(bind=engine)
 session = Session()
@@ -19,17 +20,21 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__, template_folder='ui/templates', static_url_path='', static_folder='ui/templates')
 
+TRANSPORT = 'auto' # Default Transport upon boot Enum[bredr,auto,le]
+
 @app.route('/')
 def index():
   return render_template('index.html')
 
 @app.route('/api/adapter')
 def getAdapter():
+  global TRANSPORT
   out = {}
 
   try:
     for key in adapter.get_cached_property_names():
       out[key] = adapter.get_cached_property(key).unpack()
+    out['transport'] = TRANSPORT
   except Exception as e:
     logger.error(e)
     return (jsonify({
@@ -65,6 +70,42 @@ def scanOff():
     return (jsonify({
       'error': str(e)
     }), 500)
+
+@app.route('/api/adapter/transport', methods=['GET', 'POST'])
+def getSetTransport():
+  global TRANSPORT
+
+  if request.method == 'GET':
+    return (jsonify({
+      'transport': TRANSPORT
+    }))
+  elif request.method == 'POST':
+    try:
+      transport = request.json['transport']
+
+      if transport not in ['bredr','auto','le']:
+        return (jsonify({
+          'error': 'Invalid Transport: bredr, auto, le'
+        }), 400)
+
+      adapter.SetDiscoveryFilter('(a{sv})', { 'Transport': GLib.Variant('s', transport) })
+
+      TRANSPORT = transport
+
+      return jsonify({
+        'success': True,
+        'transport': TRANSPORT
+      })
+    except Exception as e:
+      logger.error(e)
+      return (jsonify({
+        'error': str(e)
+      }), 500)
+
+  else:
+    return (jsonify({
+      'error': 'Invalid HTTP Method'
+    }), 400)
 
 @app.route('/api/query/<mac>', methods=['GET', 'DELETE'])
 def queryMac(mac = False):

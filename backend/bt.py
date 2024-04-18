@@ -17,8 +17,8 @@ if __name__ == '__main__':
   from models import Mac, OUID, Data, RSSI, Presence, UUID, UUID_Lookup, engine
   from util import macHasUUID, safeCommit, dbusPathToMac
 else:
-  from inc.models import Mac, OUID, Data, RSSI, Presence, UUID, UUID_Lookup, engine
-  from inc.util import macHasUUID, safeCommit, dbusPathToMac
+  from backend.models import Mac, OUID, Data, RSSI, Presence, UUID, UUID_Lookup, engine
+  from backend.util import macHasUUID, safeCommit, dbusPathToMac
 
 Session = sessionmaker(bind=engine)
 session = Session()

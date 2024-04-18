@@ -1,0 +1,5 @@
+sudo -i -u postgres psql -d blt -c "DELETE FROM rssi;"
+sudo -i -u postgres psql -d blt -c "DELETE FROM uuid;"
+sudo -i -u postgres psql -d blt -c "DELETE FROM presence;"
+sudo -i -u postgres psql -d blt -c "DELETE FROM data;"
+sudo -i -u postgres psql -d blt -c "DELETE FROM mac;"
