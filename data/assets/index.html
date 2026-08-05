@@ -1,0 +1,2033 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluetooth Demystifier</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0;
+    background: var(--theme-bg, #0b0f14);
+    color: var(--theme-text, #d8e1e8);
+  }
+  /* ---- top bar: frosted glass rail (see mockups/topbar-3-glass-rail.html)
+     -- color-mix (not a hardcoded alpha hex) on the translucent surfaces so
+     they keep tracking a custom --theme-bg/--theme-accent from the Settings
+     page's Appearance section; the glass/border tints stay plain white-alpha
+     since that's a texture, not a hue, same reasoning as .row-band-odd's
+     #ffffff08 elsewhere in this file. ---- */
+  header {
+    display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+    padding: 0.7rem 1rem;
+    background: color-mix(in srgb, var(--theme-bg, #0b0f14) 82%, transparent);
+    backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border-bottom: 1px solid #ffffff14;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+  #logo { height: 32px; width: auto; flex: none; }
+  .cluster {
+    display: flex; align-items: center; gap: 0.15rem;
+    background: #ffffff08; border: 1px solid #ffffff14;
+    border-radius: 12px; padding: 0.25rem;
+  }
+  .cluster.pad { padding: 0.3rem 0.7rem; gap: 0.5rem; }
+  #menu-wrap { position: relative; }
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 9px;
+    background: transparent; color: var(--theme-muted, #7d93a8); border: none; cursor: pointer;
+  }
+  .icon-btn:hover { background: #ffffff0f; color: var(--theme-text, #d8e1e8); }
+  .icon-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; }
+  #settings-menu {
+    display: none; position: absolute; top: calc(100% + 0.5rem); left: 0;
+    background: #101820; border: 1px solid var(--theme-border, #2a3a4a); border-radius: 10px;
+    min-width: 9.5rem; padding: 0.35rem; z-index: 5;
+    box-shadow: 0 20px 40px -16px #000c;
+  }
+  #settings-menu.open { display: block; }
+  .dropdown-item {
+    display: block; width: 100%; box-sizing: border-box; text-align: left;
+    background: none; border: none; color: var(--theme-text, #d8e1e8); text-decoration: none;
+    padding: 0.5rem 0.7rem; border-radius: 7px; font-size: 0.78rem; cursor: pointer;
+  }
+  .dropdown-item:hover {
+    background: color-mix(in srgb, var(--theme-accent, #4fd1c5) 15%, transparent);
+    color: var(--theme-accent, #4fd1c5);
+  }
+  button {
+    background: var(--theme-surface, #16202b); color: #cde; border: 1px solid var(--theme-border, #2a3a4a);
+    border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem;
+  }
+  button:hover { background: #1e2c3a; }
+  .ghost {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    background: transparent; color: var(--theme-text, #d8e1e8); border: none;
+    border-radius: 9px; padding: 0.4rem 0.75rem; cursor: pointer; font-size: 0.78rem;
+  }
+  .ghost:hover { background: #ffffff0f; }
+  .ghost svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 2; }
+  #auto-refresh-toggle.active {
+    color: var(--theme-accent, #4fd1c5);
+    background: color-mix(in srgb, var(--theme-accent, #4fd1c5) 13%, transparent);
+  }
+  .cap {
+    font-size: 9.5px; letter-spacing: 0.09em; color: #57708a; text-transform: uppercase;
+  }
+  .meta-group { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.3rem; }
+  #meta { font-size: 0.75rem; color: var(--theme-muted, #7d93a8); }
+  #meta .n { color: var(--theme-text, #d8e1e8); font-weight: 600; font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+  .live-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--theme-success, #6bcf7f);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--theme-success, #6bcf7f) 10%, transparent);
+    animation: header-pulse 2.4s ease-in-out infinite; flex: none;
+  }
+  @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+  @keyframes header-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  #height-select input,
+  #view-mode,
+  #time-select select, #time-select input,
+  #filter-select select, #filter-box,
+  #top-select input[type="number"] {
+    background: transparent; color: var(--theme-text, #d8e1e8); border: none;
+    padding: 0.15rem 0.25rem; font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+  }
+  #height-select input:focus, #view-mode:focus, #time-select select:focus, #time-select input:focus,
+  #filter-select select:focus, #filter-box:focus, #top-select input:focus { outline: none; }
+  #view-mode, #time-select select, #filter-select select { cursor: pointer; }
+  #height-select input::placeholder, #filter-box::placeholder { color: #57708a; }
+  #graph-height { width: 3.6rem; font: 12px ui-monospace, "SF Mono", Menlo, monospace; text-align: center; }
+  #time-select input[type="number"] { width: 2.4rem; font: 12px ui-monospace, "SF Mono", Menlo, monospace; text-align: center; }
+  #time-select input[type="datetime-local"] { width: 12.5rem; }
+  .time-fields { display: flex; align-items: center; gap: 0.2rem; }
+  .time-fields span { font-size: 0.68rem; color: #57708a; }
+  #filter-select { flex: 1; min-width: 15rem; }
+  #filter-box { width: 100%; }
+  #filter-select .icon { color: #57708a; flex: none; display: flex; }
+  #filter-select .icon svg { width: 13px; height: 13px; stroke: currentColor; fill: none; stroke-width: 1.8; }
+  #top-select label { display: flex; align-items: center; gap: 0.4rem; cursor: pointer; font-size: 0.78rem; color: var(--theme-text, #d8e1e8); }
+  input[type="checkbox"] {
+    appearance: none; width: 14px; height: 14px; border: 1px solid #ffffff22; border-radius: 5px;
+    background: #ffffff08; cursor: pointer; position: relative; padding: 0; flex: none;
+  }
+  input[type="checkbox"]:checked { background: var(--theme-accent, #4fd1c5); border-color: var(--theme-accent, #4fd1c5); }
+  input[type="checkbox"]:checked::after {
+    content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px;
+    border: solid var(--theme-bg, #0b0f14); border-width: 0 1.6px 1.6px 0; transform: rotate(45deg);
+  }
+  #top-select input[type="number"]:disabled { opacity: 0.3; }
+  #chart-wrap { overflow-x: auto; }
+  svg { display: block; }
+  .row-label { font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #9fb3c8; }
+  .row-count { font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #6d8299; }
+  /* First/last-seen result cells only (not their column headers, which stay
+     at .col-header's size) -- a few sizes smaller than the other result
+     columns since a full date+time string is wider than a bare number. */
+  .row-count-time { font-size: 8px; }
+  .col-header { font: bold 10px sans-serif; fill: #6d8299; text-transform: uppercase; letter-spacing: 0.04em; }
+  .count-header, .alias-header, .uuid-header, .rssi-header, .first-seen-header, .last-seen-header, .mac-header, .tags-header, .service-data-header { cursor: pointer; }
+  .count-header:hover, .alias-header:hover, .uuid-header:hover, .rssi-header:hover, .first-seen-header:hover, .last-seen-header:hover, .mac-header:hover, .tags-header:hover, .service-data-header:hover { fill: #cde; text-decoration: underline; }
+  .row-band-odd { fill: #ffffff08; }
+  .tick-line { stroke: #ffffff14; stroke-width: 1; }
+  .tick-label { font: bold 11px sans-serif; fill: var(--theme-accent, #4fd1c5); }
+  .dot:hover { filter: brightness(1.3); }
+  .point:hover { filter: brightness(1.3); }
+  #empty { padding: 2rem; color: var(--theme-muted, #7d93a8); font-size: 0.9rem; }
+  .row-label { cursor: pointer; }
+  .row-label:hover { text-decoration: underline; }
+  .col-resize-handle { cursor: col-resize; }
+  .col-resize-handle:hover { fill: #4fd1c533; }
+  body.column-resizing { cursor: col-resize; user-select: none; }
+  #modal-backdrop {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0, 0, 0, 0.6);
+    align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  #modal-backdrop.open { display: flex; }
+  /* Two-column layout: identity/stats/tags sidebar + scrollable content
+     pane. #modal-body is the actual innerHTML target (unchanged from
+     before) but display:contents lets its rendered children (#sidebar,
+     #content) become direct grid items of #modal itself. */
+  #modal {
+    background: #101820; border: 1px solid var(--theme-border, #2a3a4a); border-radius: 10px;
+    width: min(880px, 92vw); max-height: 84vh;
+    padding: 1.25rem 1.5rem; position: relative;
+    display: grid; grid-template-columns: 220px 1fr; gap: 1.4rem;
+    overflow: hidden;
+  }
+  #modal-body { display: contents; }
+  #modal-close {
+    position: absolute; top: 0.6rem; right: 0.6rem;
+    background: none; border: none; color: var(--theme-muted, #7d93a8); font-size: 1.2rem;
+    margin-left: 0; line-height: 1; padding: 0.2rem 0.5rem; z-index: 1;
+  }
+  #modal-close:hover { color: var(--theme-text, #d8e1e8); background: none; }
+
+  #sidebar {
+    border-right: 1px solid #1e2a36; padding-right: 1.25rem;
+    overflow-y: auto; max-height: calc(84vh - 2.5rem);
+  }
+  #sidebar h2 { margin: 0 0 0.9rem; font-size: 1.05rem; line-height: 1.3; }
+  .stat-tile {
+    background: var(--theme-surface, #16202b); border: 1px solid var(--theme-border, #2a3a4a); border-radius: 8px;
+    padding: 0.55rem 0.7rem; margin-bottom: 0.5rem;
+  }
+  .stat-tile .stat-label { font-size: 0.72rem; color: var(--theme-muted, #7d93a8); margin-bottom: 0.15rem; }
+  .stat-tile .stat-value { font-size: 1.2rem; font-weight: 600; color: var(--theme-text, #d8e1e8); }
+  table.kv.compact { border-collapse: collapse; width: 100%; font-size: 0.78rem; margin: 0.9rem 0; }
+  table.kv.compact th { display: block; text-align: left; color: var(--theme-muted, #7d93a8); padding-top: 0.5rem; font-weight: 500; }
+  table.kv.compact td { display: block; padding: 0.05rem 0 0.1rem; word-break: break-word; }
+
+  #content { overflow-y: auto; max-height: calc(84vh - 2.5rem); padding-right: 0.25rem; }
+  #content h3 {
+    margin: 0 0 0.4rem; font-size: 0.85rem; color: var(--theme-muted, #7d93a8); text-transform: uppercase;
+    letter-spacing: 0.04em; display: flex; align-items: center; justify-content: space-between; gap: 0.5rem;
+  }
+  #content section + section { margin-top: 1.1rem; }
+  #content ul { margin: 0; padding-left: 1.1rem; font-size: 0.85rem; }
+  #content li { margin: 0.2rem 0; }
+  #content li.muted, #content .muted { color: #57708a; }
+  #content code { font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: #9fb3c8; }
+  #content .decoded { margin-top: 0.15rem; color: var(--theme-success, #6bcf7f); font-size: 0.8rem; }
+  /* "Windowed" so a long service data history (see record_service_data --
+     this logs every observation now, not just payload changes, so it can
+     get long) scrolls in its own bounded pane instead of just stretching
+     #content's own scroll area taller and taller. */
+  /* font-size here is inherited by the timestamp/decoded text; the UUID's
+     <code> is bumped up to match it too (rather than #content code's global
+     11px) so all three parts of a line read at one consistent size. */
+  #content .service-data-list {
+    max-height: 220px; overflow-y: auto; font-size: 0.8rem;
+    border: 1px solid #1e2a36; border-radius: 6px; background: #0d141b;
+    padding: 0.5rem 0.7rem 0.5rem 1.7rem;
+  }
+  #content .service-data-list li code { font-size: 0.8rem; }
+  .rssi-summary { display: flex; gap: 1rem; font-size: 0.8rem; margin-bottom: 0.5rem; }
+  .rssi-history-table { border-collapse: collapse; font-size: 0.78rem; min-width: 220px; }
+  .rssi-history-table th, .rssi-history-table td { padding: 0.25rem 1.2rem 0.25rem 0; }
+  .rssi-history-table th {
+    text-align: left; color: var(--theme-muted, #7d93a8); font-weight: 500; text-transform: uppercase;
+    font-size: 0.7rem; letter-spacing: 0.03em; border-bottom: 1px solid var(--theme-border, #2a3a4a);
+  }
+  .rssi-history-table td {
+    font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: var(--theme-text, #d8e1e8);
+  }
+  .rssi-history-table td:last-child { text-align: right; padding-right: 0; }
+  .rssi-history-table tbody tr:nth-child(even) td { background: #ffffff08; }
+  .connect-btn {
+    text-transform: none; letter-spacing: normal; font-size: 0.7rem; font-weight: normal;
+    padding: 0.2rem 0.55rem; color: #7fe0d3; border-color: #3b9d94;
+  }
+  .connect-btn:hover { background: #163a36; }
+  .connect-btn[data-state="connected"] { color: #ff8f8f; border-color: #6a3535; }
+  .connect-btn[data-state="connected"]:hover { background: #3a1f1f; }
+  .connect-btn:disabled { opacity: 0.6; cursor: default; }
+  .connect-btn:disabled:hover { background: var(--theme-surface, #16202b); }
+
+  /* ---- toasts (see showToast) -- brief, non-blocking status popups for a
+     device Connect/Disconnect (successful, unsuccessful, or the device
+     dropping on its own), NOT a JS alert() -- those block the whole page on
+     a single OK button; these just fade in top-center, sit for a few
+     seconds, and fade back out on their own. Top-center rather than a
+     corner so they're not hidden behind a mobile browser's own bottom
+     chrome (the modal is regularly tested from a phone on the LAN). ---- */
+  #toast-container {
+    position: fixed; top: 1.25rem; left: 50%; transform: translateX(-50%); z-index: 9999;
+    display: flex; flex-direction: column; align-items: center; gap: 0.5rem; pointer-events: none;
+  }
+  .toast {
+    background: var(--theme-surface, #16202b); color: #cde; border: 1px solid var(--theme-border, #2a3a4a); border-left: 3px solid var(--theme-accent, #4fd1c5);
+    border-radius: 6px; padding: 0.6rem 0.9rem; font-size: 0.85rem; box-shadow: 0 4px 16px #00000066;
+    opacity: 0; transform: translateY(-0.4rem); transition: opacity 0.2s, transform 0.2s;
+    /* Fixed rather than content-sized so every toast lines up at the same
+       width regardless of message length (e.g. a MAC address vs. a shorter
+       label) -- box-sizing so the fixed width includes the padding above,
+       and word-wrap so a message that's still too long to fit wraps instead
+       of overflowing the box. */
+    width: 20rem; box-sizing: border-box; text-align: center; word-wrap: break-word;
+  }
+  .toast.toast-disconnected { border-left-color: #ff8f8f; }
+  .toast.toast-unsuccessful { border-left-color: #ffd166; }
+  .toast.toast-visible { opacity: 1; transform: translateY(0); }
+
+  /* ---- tags (user-supplied, see device_tags) ---- */
+  .tag-pills { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.2rem; min-height: 1.6rem; }
+  .tag-pill {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    background: #1e2c3a; border: 1px solid var(--theme-border, #2a3a4a); color: #9fb3c8;
+    border-radius: 999px; padding: 0.15rem 0.5rem 0.15rem 0.7rem; font-size: 0.78rem;
+  }
+  .tag-pill button {
+    background: none; border: none; color: #57708a; cursor: pointer;
+    font-size: 0.85rem; line-height: 1; padding: 0 0.1rem;
+  }
+  .tag-pill button:hover { color: var(--theme-danger, #ff6b6b); }
+  .tag-input-row { display: flex; gap: 0.4rem; }
+  .tag-input-row input {
+    flex: 1; background: var(--theme-bg, #0b0f14); color: #cde; border: 1px solid var(--theme-border, #2a3a4a);
+    border-radius: 6px; padding: 0.35rem 0.6rem; font-size: 0.8rem;
+  }
+  .tag-input-row input::placeholder { color: #57708a; }
+  .tag-error { color: var(--theme-danger, #ff6b6b); font-size: 0.72rem; margin-top: 0.3rem; min-height: 1em; }
+</style>
+</head>
+<body>
+<header>
+  <img id="logo" src="/logo.png" alt="Bluetooth Demystifier logo">
+  <div class="cluster" id="menu-wrap">
+    <button class="icon-btn" id="hamburger-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
+      <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
+    <div id="settings-menu">
+      <a class="dropdown-item" href="/settings">Settings</a>
+    </div>
+  </div>
+  <div class="cluster pad" id="height-select" title="Total plotted height">
+    <label class="cap" for="graph-height">H</label>
+    <input type="number" id="graph-height" min="1" step="10" placeholder="auto">
+  </div>
+  <span class="meta-group">
+    <span class="live-dot"></span>
+    <span class="meta" id="meta"></span>
+  </span>
+  <div class="cluster pad">
+    <select id="view-mode">
+      <option value="window" selected>Window view</option>
+      <option value="points">Points view</option>
+    </select>
+  </div>
+  <div class="cluster pad" id="time-select">
+    <select id="time-mode">
+      <option value="relative" selected>Previous</option>
+      <option value="absolute">Range</option>
+    </select>
+    <span class="time-fields" id="relative-fields">
+      <input type="number" id="rel-days" min="0" value="0"><span>d</span>
+      <input type="number" id="rel-hours" min="0" value="0"><span>h</span>
+      <input type="number" id="rel-minutes" min="0" value="5"><span>m</span>
+    </span>
+    <span class="time-fields" id="absolute-fields" style="display:none">
+      <input type="datetime-local" id="abs-start" step="1">
+      <span>to</span>
+      <input type="datetime-local" id="abs-end" step="1">
+    </span>
+  </div>
+  <div class="cluster pad" id="filter-select">
+    <span class="icon"><svg viewBox="0 0 24 24"><path d="M4 5h16l-6 8v6l-4-2v-4z"/></svg></span>
+    <select id="filter-mode" title="Equals: show only matches. Not equals: hide matches, show everything else.">
+      <option value="equals" selected>Equals</option>
+      <option value="not-equals">Not equals</option>
+    </select>
+    <input type="text" id="filter-box" placeholder="address, alias, manufacturer, UUID, service data, emoji…  ; = or, + = and">
+  </div>
+  <div class="cluster pad" id="top-select">
+    <label><input type="checkbox" id="top-enabled"> Top</label>
+    <input type="number" id="top-n" min="1" value="10">
+  </div>
+  <div class="cluster pad">
+    <button class="ghost" id="refresh">
+      <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7M21 3v6h-6"/></svg>Refresh
+    </button>
+    <button class="ghost" id="auto-refresh-toggle" title="Auto-refresh every 2 seconds" aria-pressed="false">
+      <svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>
+    </button>
+  </div>
+</header>
+<div id="chart-wrap"><div id="empty">Loading...</div></div>
+<div id="modal-backdrop">
+  <div id="modal">
+    <button id="modal-close" aria-label="Close">&times;</button>
+    <div id="modal-body"></div>
+  </div>
+</div>
+<div id="toast-container"></div>
+<script>
+// Comfortable default single-line row height. This is the "auto" row height
+// (see computeRowHeight) -- used as-is until the Graph height field is given
+// an explicit value, at which point row height is derived from that instead
+// so every row still fits within it.
+const DEFAULT_ROW_HEIGHT = 30;
+const MIN_ROW_HEIGHT = 1;
+const LABEL_WIDTH = 210;
+const LABEL_MAX_CHARS = 28;
+const TAGS_MAX_CHARS = 24;
+// A device can match several categories at once (OUID and/or alias keyword
+// matches -- see device_classifications), so a row can show more than one
+// icon. LABEL_ICON_SLOT is the horizontal space reserved per icon glyph;
+// LABEL_ICON_GAP is the extra breathing room between the last icon and the
+// alias text. The name always starts at 6 + maxIcons*SLOT + GAP, where
+// maxIcons is the most icons any row in the current view has -- so every
+// row's name lines up at the same x regardless of how many icons *that*
+// row happens to have (0, 1, or several).
+const LABEL_ICON_SLOT = 14;
+const LABEL_ICON_GAP = 12;
+const TOP_MARGIN = 30;
+const RIGHT_PADDING = 20;
+const MIN_DOT_WIDTH = 5;
+// Drag-resize clamp for optional columns (see pushColumnResizeHandles) --
+// mirrors app.py's MIN_COLUMN_WIDTH/MAX_COLUMN_WIDTH. The server re-validates
+// against those same bounds on save regardless, so this is just so the drag
+// itself never visually overshoots what the save would actually accept.
+const MIN_COLUMN_WIDTH = 24;
+const MAX_COLUMN_WIDTH = 400;
+
+// Optional columns between Alias and the plot -- shown/hidden and ordered
+// per columnConfig (loaded from /api/columns, see loadColumnConfig), unlike
+// Alias and the plot itself which are always present. Keys here must match
+// ALLOWED_COLUMNS/DEFAULT_COLUMN_ORDER in app.py. `hint` is the column
+// header's tooltip; count's differs by view (see countHint below) so it's
+// left out here and filled in at render time instead.
+const COLUMN_DEFS = {
+  count: { label: 'Count', width: 50, headerClass: 'count-header' },
+  rssi: { label: 'RSSI', width: 50, headerClass: 'rssi-header', hint: 'Click to sort by most recent RSSI (dBm)' },
+  uuid: { label: 'UUIDs', width: 50, headerClass: 'uuid-header', hint: 'Click to sort by observed UUID count' },
+  first_seen: {
+    label: 'First seen', width: 110, headerClass: 'first-seen-header',
+    hint: 'Click to sort by first seen time', timeCell: true,
+  },
+  last_seen: {
+    label: 'Last seen', width: 110, headerClass: 'last-seen-header',
+    hint: 'Click to sort by last seen time', timeCell: true,
+  },
+  mac: { label: 'MAC Address', width: 130, headerClass: 'mac-header', hint: 'Click to sort by MAC address' },
+  tags: { label: 'Tags', width: 160, headerClass: 'tags-header', hint: 'Click to sort by tags' },
+  service_data: {
+    label: 'Service Data', width: 90, headerClass: 'service-data-header',
+    hint: 'Click to sort by total historic service data bytes',
+  },
+};
+// Columns whose sort cycles asc-first (like a name) rather than desc-first
+// (like a magnitude) -- see setSort. Alias itself isn't in COLUMN_DEFS (it's
+// not optional) but follows the same asc-first rule.
+const SORT_ASC_FIRST_KEYS = new Set(['alias', 'mac', 'tags']);
+
+// Fallback used until /api/columns resolves (or if it fails) -- mirrors
+// app.py's DEFAULT_COLUMN_ORDER/DEFAULT_HIDDEN_COLUMNS/DEFAULT_COLUMN_WIDTHS
+// exactly, so the chart looks the same as it always has (mac hidden,
+// everything else shown at its original width, in this order) before the
+// real saved config loads.
+let columnConfig = [
+  { key: 'count', visible: true, width: 50 },
+  { key: 'rssi', visible: true, width: 50 },
+  { key: 'uuid', visible: true, width: 50 },
+  { key: 'first_seen', visible: true, width: 110 },
+  { key: 'last_seen', visible: true, width: 110 },
+  { key: 'mac', visible: false, width: 130 },
+  { key: 'tags', visible: true, width: 160 },
+  { key: 'service_data', visible: false, width: 90 },
+];
+
+async function loadColumnConfig() {
+  try {
+    const res = await fetch('/api/columns');
+    const data = await res.json();
+    if (Array.isArray(data.columns) && data.columns.length) columnConfig = data.columns;
+  } catch (err) {
+    // Keep the built-in fallback above.
+  }
+}
+
+// Left-to-right pixel layout for the currently-visible optional columns,
+// recomputed on every render (not cached) since columnConfig can change
+// between renders via the Settings page, a live drag-resize, or a reload.
+// Alias always starts at LABEL_WIDTH; each visible column after it adds its
+// own width (the saved column_config value, or COLUMN_DEFS's static default
+// as a fallback for a column_config row saved before width tracking existed)
+// in columnConfig order, and whatever's left of the row is the plot
+// (plotStart).
+function computeColumnLayout() {
+  let x = LABEL_WIDTH;
+  const columns = [];
+  for (const c of columnConfig) {
+    const def = COLUMN_DEFS[c.key];
+    if (!c.visible || !def) continue;
+    const width = c.width || def.width;
+    x += width;
+    columns.push({ key: c.key, def, width, colEnd: x });
+  }
+  return { columns, plotStart: x };
+}
+
+const CATEGORY_COLORS = { RED: '#ff6b6b', YELLOW: '#ffd166', GREEN: '#6bcf7f', PINK: '#ff8fd1' };
+const DEFAULT_MARK_COLOR = '#4fd1c5'; // uncategorized device (no OUI/category match)
+
+// Points view combines two encodings on the same dot: device category
+// (identity) picks the base hue (see CATEGORY_COLORS/markColor); RSSI
+// (magnitude) then shades that hue -- weak signal is a light tint of it,
+// strong signal is the deep/saturated end -- AND scales radius, so a strong
+// reading reads as bigger and richer in color, never via opacity/
+// transparency. Capped so a very strong reading never dominates a row.
+// RSSI_FLOOR/CEIL are typical BLE advert bounds (weak..close-range); values
+// outside get clamped rather than plotted off-scale.
+const MIN_POINT_RADIUS = 4;
+const MAX_POINT_RADIUS = 9;
+const RSSI_FLOOR = -100;
+const RSSI_CEIL = -30;
+const RSSI_WEAK_TINT = 0.7;   // weak signal: fraction of the base color mixed toward white
+const RSSI_STRONG_SHADE = 0.25; // strong signal: fraction of the base color mixed toward black
+
+function markColor(color) {
+  return CATEGORY_COLORS[color] || DEFAULT_MARK_COLOR;
+}
+
+let allDots = null;
+let allPoints = null;
+let viewMode = 'window'; // 'window' (device_appearances sessions) | 'points' (raw_observations)
+let lastWindow = null;
+// Single active sort column, replacing what used to be one *SortDir variable
+// per column -- only one column can ever be sorted at a time (see setSort),
+// so this was always effectively one piece of state.
+// key: null (chronological) | 'alias' | one of COLUMN_DEFS's keys
+// dir: null | 'asc' | 'desc'
+// Defaults to last_seen/desc (most recently seen device first) rather than
+// unsorted -- setSort's normal cycle (desc -> asc -> unsorted, see
+// SORT_ASC_FIRST_KEYS) still applies from here same as if the user had
+// clicked the column themselves.
+let sortState = { key: 'last_seen', dir: 'desc' };
+let customGraphHeight = null; // null = auto (DEFAULT_ROW_HEIGHT); else a user-set total px target
+
+function chartWidth() {
+  return Math.max(900, window.innerWidth - 40);
+}
+
+// Auto (customGraphHeight unset): every row gets DEFAULT_ROW_HEIGHT, so the
+// graph's total height grows/shrinks with however many rows are in view --
+// today's behavior, unchanged. Once a target height IS set, it's the total
+// that stays fixed instead -- row height is derived from it (target minus
+// the header/tick margin, divided across the current row count) so however
+// many rows are in view, they always fill exactly that height.
+function computeRowHeight(numRows) {
+  if (customGraphHeight == null || numRows <= 0) return DEFAULT_ROW_HEIGHT;
+  const available = customGraphHeight - TOP_MARGIN - 10;
+  return Math.max(MIN_ROW_HEIGHT, available / numRows);
+}
+
+function escapeXml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function truncate(str, maxChars) {
+  return str.length > maxChars ? str.slice(0, maxChars - 1) + '…' : str;
+}
+
+// Shared by render() and renderPoints(): draws a row's icons (a device can
+// match several categories -- see device_classifications) and alias/address
+// name as separate text elements so the name can be indented consistently
+// regardless of how many icons this particular row has -- see maxIcons and
+// LABEL_ICON_SLOT/LABEL_ICON_GAP. Tags (device_tags, user-supplied) are
+// their own optional column now (see COLUMN_DEFS.tags/pushRowCells), not
+// drawn here.
+function pushRowLabel(svg, address, first, y, maxIcons, rowHeight) {
+  const labelColor = CATEGORY_COLORS[first.color];
+  const name = truncate(first.alias || address, LABEL_MAX_CHARS);
+  const style = labelColor ? ` style="fill:${labelColor}"` : '';
+  const title = `<title>${escapeXml(address)} (click for details)</title>`;
+  const nameY = y + rowHeight / 2 + 4;
+  const icons = first.icons || [];
+  icons.forEach((icon, i) => {
+    svg.push(
+      `<text class="row-label" data-address="${escapeXml(address)}" ` +
+      `x="${6 + i * LABEL_ICON_SLOT}" y="${nameY}">${escapeXml(icon)}${title}</text>`
+    );
+  });
+  const nameX = maxIcons > 0 ? 6 + maxIcons * LABEL_ICON_SLOT + LABEL_ICON_GAP : 6;
+  svg.push(
+    `<text class="row-label" data-address="${escapeXml(address)}"${style} ` +
+    `x="${nameX}" y="${nameY}">${escapeXml(name)}${title}</text>`
+  );
+}
+
+function formatTick(ms, spanMs, step) {
+  const date = new Date(ms);
+  if (spanMs > 24 * 3600 * 1000) {
+    return date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  // Ticks land exactly on the step boundary (see pickTickStep/ceilToStep),
+  // so seconds are always :00 once the step is a minute or coarser --
+  // showing them would just be redundant zeros.
+  const showSeconds = !step || step.unit === 'second';
+  return date.toLocaleTimeString([], showSeconds
+    ? { hour: '2-digit', minute: '2-digit', second: '2-digit' }
+    : { hour: '2-digit', minute: '2-digit' });
+}
+
+// "Nice" tick step selection (à la d3.ticks): candidates in increasing
+// order, each tagged with the calendar unit + multiple it steps by. Ticks
+// must land on real calendar boundaries (:00, :05, :10... not span/6
+// fractions of whatever the selected time range happens to be), so stepping
+// is done via Date field setters (below) rather than raw ms arithmetic --
+// that keeps alignment correct across DST transitions for hour+ steps.
+const TICK_STEPS = [
+  { unit: 'second', mult: 1 }, { unit: 'second', mult: 5 },
+  { unit: 'second', mult: 10 }, { unit: 'second', mult: 15 }, { unit: 'second', mult: 30 },
+  { unit: 'minute', mult: 1 }, { unit: 'minute', mult: 5 },
+  { unit: 'minute', mult: 10 }, { unit: 'minute', mult: 15 }, { unit: 'minute', mult: 30 },
+  { unit: 'hour', mult: 1 }, { unit: 'hour', mult: 3 }, { unit: 'hour', mult: 6 }, { unit: 'hour', mult: 12 },
+  { unit: 'day', mult: 1 },
+];
+const TICK_STEP_MS = { second: 1000, minute: 60000, hour: 3600000, day: 86400000 };
+const TARGET_TICK_COUNT = 6;
+
+const UNIT_FIELDS = {
+  second: { get: 'getSeconds', set: 'setSeconds', zero: d => d.setMilliseconds(0) },
+  minute: { get: 'getMinutes', set: 'setMinutes', zero: d => d.setSeconds(0, 0) },
+  hour: { get: 'getHours', set: 'setHours', zero: d => d.setMinutes(0, 0, 0) },
+  day: { get: 'getDate', set: 'setDate', zero: d => d.setHours(0, 0, 0, 0) },
+};
+
+// Picks the smallest step that keeps the tick count at or under the target
+// -- i.e. the finest calendar-aligned granularity that still fits.
+function pickTickStep(spanMs) {
+  for (const step of TICK_STEPS) {
+    if (spanMs / (TICK_STEP_MS[step.unit] * step.mult) <= TARGET_TICK_COUNT) return step;
+  }
+  return TICK_STEPS[TICK_STEPS.length - 1];
+}
+
+// Rounds ms up to the next calendar boundary that's a multiple of the step
+// (e.g. step {minute, 5} on 16:23:47 -> 16:25:00), local time.
+function ceilToStep(ms, step) {
+  const field = UNIT_FIELDS[step.unit];
+  const d = new Date(ms);
+  field.zero(d);
+  const flooredMs = d.getTime();
+  const value = d[field.get]();
+  const rem = value % step.mult;
+  const add = rem !== 0 ? step.mult - rem : (flooredMs < ms ? step.mult : 0);
+  if (add > 0) d[field.set](value + add);
+  return d.getTime();
+}
+
+function addStep(ms, step) {
+  const field = UNIT_FIELDS[step.unit];
+  const d = new Date(ms);
+  d[field.set](d[field.get]() + step.mult);
+  return d.getTime();
+}
+
+// Shared by render() and renderPoints(): draws tick lines/labels snapped to
+// nice calendar boundaries (1/5/10/15/30 min, etc.) sized to the selected
+// range, instead of dividing the range into arbitrary equal fractions.
+function pushTicks(svg, domainStart, domainEnd, scaleX, height, span) {
+  const step = pickTickStep(domainEnd - domainStart);
+  let t = ceilToStep(domainStart, step);
+  while (t <= domainEnd) {
+    const x = scaleX(t);
+    svg.push(`<line class="tick-line" x1="${x}" y1="${TOP_MARGIN}" x2="${x}" y2="${height}"/>`);
+    svg.push(`<text class="tick-label" x="${x + 2}" y="${TOP_MARGIN - 8}">${formatTick(t, span, step)}</text>`);
+    t = addStep(t, step);
+  }
+}
+
+// Normalized [0, 1] position of an RSSI reading between FLOOR (weak) and
+// CEIL (strong), clamped -- readings outside the typical range still plot,
+// just pinned to the nearest end of the scale rather than off it.
+function rssiT(rssi) {
+  return Math.max(0, Math.min(1, (rssi - RSSI_FLOOR) / (RSSI_CEIL - RSSI_FLOOR)));
+}
+
+function rssiRadius(rssi) {
+  if (rssi == null) return MIN_POINT_RADIUS;
+  return MIN_POINT_RADIUS + rssiT(rssi) * (MAX_POINT_RADIUS - MIN_POINT_RADIUS);
+}
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function rgbToHex(rgb) {
+  return '#' + rgb.map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+}
+
+function mixHex(hexA, hexB, t) {
+  const a = hexToRgb(hexA);
+  const b = hexToRgb(hexB);
+  return rgbToHex(a.map((v, i) => v + (b[i] - v) * t));
+}
+
+// Shades a category's base color by RSSI: weak signal is a light tint of
+// it (mixed toward white), strong signal is the deep/saturated end (mixed
+// toward black) -- a color scheme, not a transparency fade.
+function rssiShade(baseColor, rssi) {
+  const weakEnd = mixHex(baseColor, '#ffffff', RSSI_WEAK_TINT);
+  const strongEnd = mixHex(baseColor, '#000000', RSSI_STRONG_SHADE);
+  if (rssi == null) return weakEnd;
+  return mixHex(weakEnd, strongEnd, rssiT(rssi));
+}
+
+function render(dots, windowStart, windowEnd) {
+  lastWindow = { start: windowStart, end: windowEnd };
+  const wrap = document.getElementById('chart-wrap');
+  const meta = document.getElementById('meta');
+
+  if (dots.length === 0) {
+    const filtering = document.getElementById('filter-box').value.trim() !== '';
+    wrap.innerHTML = `<div id="empty">No presence data ${filtering ? 'matches this filter' : 'in this time window'}.</div>`;
+    meta.textContent = '';
+    return;
+  }
+
+  const byAddress = new Map();
+  for (const d of dots) {
+    d.startMs = Date.parse(d.start);
+    d.endMs = Date.parse(d.end);
+    if (!byAddress.has(d.address)) byAddress.set(d.address, []);
+    byAddress.get(d.address).push(d);
+  }
+
+  const rows = [...byAddress.keys()].map(address => {
+    const items = byAddress.get(address);
+    return { address, items, first: items[0], ...rowMetrics('window', items) };
+  });
+  const sortedRows = sortRows(rows);
+
+  const minTime = windowStart != null ? windowStart : Math.min(...dots.map(d => d.startMs));
+  const maxTime = windowEnd != null ? windowEnd : Math.max(...dots.map(d => d.endMs));
+  const span = Math.max(maxTime - minTime, 1000);
+  const padding = windowStart != null && windowEnd != null ? 0 : span * 0.02;
+  const domainStart = minTime - padding;
+  const domainEnd = maxTime + padding;
+
+  const width = chartWidth();
+  const layout = computeColumnLayout();
+  const plotWidth = width - layout.plotStart - RIGHT_PADDING;
+  const scaleX = t => layout.plotStart + ((t - domainStart) / (domainEnd - domainStart)) * plotWidth;
+
+  const rowHeight = computeRowHeight(sortedRows.length);
+  const height = TOP_MARGIN + sortedRows.length * rowHeight + 10;
+  const svg = [`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`];
+
+  // Computed before the header row so "Alias" can line up at the same x as
+  // the name text itself (see pushRowLabel/nameX) -- not the fixed left
+  // edge -- whenever any row in view actually has an icon.
+  const maxIcons = Math.max(0, ...sortedRows.map(r => (r.first.icons || []).length));
+  const aliasHeaderX = maxIcons > 0 ? 6 + maxIcons * LABEL_ICON_SLOT + LABEL_ICON_GAP : 6;
+
+  const aliasArrow = sortState.key === 'alias' ? (sortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  svg.push(
+    `<text class="col-header alias-header" data-sort-key="alias" x="${aliasHeaderX}" y="${TOP_MARGIN - 8}">` +
+    `Alias${aliasArrow}<title>Click to sort alphabetically</title></text>`
+  );
+  pushColumnHeaders(svg, layout, 'Click to sort by count');
+
+  sortedRows.forEach((row, i) => {
+    const y = TOP_MARGIN + i * rowHeight;
+    if (i % 2 === 1) {
+      svg.push(`<rect class="row-band-odd" x="0" y="${y}" width="${width}" height="${rowHeight}"/>`);
+    }
+    pushRowLabel(svg, row.address, row.first, y, maxIcons, rowHeight);
+    pushRowCells(svg, layout, row, y, rowHeight, 'Adverts across all windows in current view');
+  });
+
+  pushTicks(svg, domainStart, domainEnd, scaleX, height, span);
+
+  sortedRows.forEach((row, i) => {
+    const y = TOP_MARGIN + i * rowHeight + 3;
+    const h = Math.max(2, rowHeight - 6);
+    for (const d of row.items) {
+      const x1 = scaleX(Math.max(d.startMs, domainStart));
+      const x2 = Math.max(scaleX(Math.min(d.endMs, domainEnd)), x1 + MIN_DOT_WIDTH);
+      const who = d.alias ? `${d.alias} (${row.address})` : row.address;
+      svg.push(
+        `<rect class="dot" x="${x1}" y="${y}" width="${x2 - x1}" height="${h}" rx="${h / 2}" fill="${markColor(d.color)}">` +
+        `<title>${escapeXml(who)}&#10;${escapeXml(d.start)} -&gt; ${escapeXml(d.end)}</title>` +
+        `</rect>`
+      );
+    }
+  });
+
+  pushColumnResizeHandles(svg, layout, height);
+  svg.push('</svg>');
+  wrap.innerHTML = svg.join('');
+  meta.innerHTML = `<span class="n">${sortedRows.length}</span> devices seen`;
+}
+
+// Points view: same row-per-device layout as render(), but each row plots
+// individual raw_observations rows as dots positioned by seen_at, sized and
+// colored by rssi, instead of one bar per session.
+function renderPoints(points, windowStart, windowEnd) {
+  lastWindow = { start: windowStart, end: windowEnd };
+  const wrap = document.getElementById('chart-wrap');
+  const meta = document.getElementById('meta');
+
+  if (points.length === 0) {
+    const filtering = document.getElementById('filter-box').value.trim() !== '';
+    wrap.innerHTML = `<div id="empty">No observations ${filtering ? 'matches this filter' : 'in this time window'}.</div>`;
+    meta.textContent = '';
+    return;
+  }
+
+  const byAddress = new Map();
+  for (const p of points) {
+    p.seenMs = Date.parse(p.seen_at);
+    if (!byAddress.has(p.address)) byAddress.set(p.address, []);
+    byAddress.get(p.address).push(p);
+  }
+
+  const rows = [...byAddress.keys()].map(address => {
+    const items = byAddress.get(address);
+    return { address, items, first: items[0], ...rowMetrics('points', items) };
+  });
+  const sortedRows = sortRows(rows);
+
+  const minTime = windowStart != null ? windowStart : Math.min(...points.map(p => p.seenMs));
+  const maxTime = windowEnd != null ? windowEnd : Math.max(...points.map(p => p.seenMs));
+  const span = Math.max(maxTime - minTime, 1000);
+  const padding = windowStart != null && windowEnd != null ? 0 : span * 0.02;
+  const domainStart = minTime - padding;
+  const domainEnd = maxTime + padding;
+
+  const width = chartWidth();
+  const layout = computeColumnLayout();
+  const plotWidth = width - layout.plotStart - RIGHT_PADDING;
+  const scaleX = t => layout.plotStart + ((t - domainStart) / (domainEnd - domainStart)) * plotWidth;
+
+  const rowHeight = computeRowHeight(sortedRows.length);
+  const height = TOP_MARGIN + sortedRows.length * rowHeight + 10;
+  const svg = [`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`];
+
+  // Computed before the header row so "Alias" can line up at the same x as
+  // the name text itself (see pushRowLabel/nameX) -- not the fixed left
+  // edge -- whenever any row in view actually has an icon.
+  const maxIcons = Math.max(0, ...sortedRows.map(r => (r.first.icons || []).length));
+  const aliasHeaderX = maxIcons > 0 ? 6 + maxIcons * LABEL_ICON_SLOT + LABEL_ICON_GAP : 6;
+
+  const aliasArrow = sortState.key === 'alias' ? (sortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+  svg.push(
+    `<text class="col-header alias-header" data-sort-key="alias" x="${aliasHeaderX}" y="${TOP_MARGIN - 8}">` +
+    `Alias${aliasArrow}<title>Click to sort alphabetically</title></text>`
+  );
+  pushColumnHeaders(svg, layout, 'Click to sort by observation count');
+
+  sortedRows.forEach((row, i) => {
+    const y = TOP_MARGIN + i * rowHeight;
+    if (i % 2 === 1) {
+      svg.push(`<rect class="row-band-odd" x="0" y="${y}" width="${width}" height="${rowHeight}"/>`);
+    }
+    pushRowLabel(svg, row.address, row.first, y, maxIcons, rowHeight);
+    pushRowCells(svg, layout, row, y, rowHeight, 'Individual observations in current view');
+  });
+
+  pushTicks(svg, domainStart, domainEnd, scaleX, height, span);
+
+  sortedRows.forEach((row, i) => {
+    const y = TOP_MARGIN + i * rowHeight + rowHeight / 2;
+    for (const p of row.items) {
+      if (p.seenMs < domainStart || p.seenMs > domainEnd) continue;
+      const x = scaleX(p.seenMs);
+      const who = p.alias ? `${p.alias} (${row.address})` : row.address;
+      const rssiLabel = p.rssi != null ? `${p.rssi} dBm` : 'RSSI unknown';
+      svg.push(
+        `<circle class="point" cx="${x}" cy="${y}" r="${rssiRadius(p.rssi)}" ` +
+        `fill="${rssiShade(markColor(p.color), p.rssi)}">` +
+        `<title>${escapeXml(who)}&#10;${escapeXml(p.seen_at)}&#10;${escapeXml(rssiLabel)}</title>` +
+        `</circle>`
+      );
+    }
+  });
+
+  pushColumnResizeHandles(svg, layout, height);
+  svg.push('</svg>');
+  wrap.innerHTML = svg.join('');
+  meta.innerHTML = `<span class="n">${sortedRows.length}</span> devices seen`;
+}
+
+function toApiIso(date) {
+  return date.toISOString().replace('Z', '+00:00');
+}
+
+function currentWindow() {
+  const mode = document.getElementById('time-mode').value;
+  if (mode === 'relative') return relativeWindow();
+  const startVal = document.getElementById('abs-start').value;
+  const endVal = document.getElementById('abs-end').value;
+  return {
+    start: startVal ? new Date(startVal) : null,
+    end: endVal ? new Date(endVal) : null,
+  };
+}
+
+async function loadData() {
+  const { start, end } = currentWindow();
+  const params = new URLSearchParams();
+  if (start) params.set('start', toApiIso(start));
+  if (end) params.set('end', toApiIso(end));
+  const endpoint = viewMode === 'points' ? '/api/points' : '/api/dots';
+  const res = await fetch(endpoint + '?' + params.toString());
+  const data = await res.json();
+  if (viewMode === 'points') {
+    allPoints = data;
+  } else {
+    allDots = data;
+  }
+  applyFilter(start ? start.getTime() : null, end ? end.getTime() : null);
+}
+
+// Live substring filter over the server-built `search` blob (address, alias,
+// manufacturer, classification, service/solicited UUIDs + names, service
+// data, tags -- every field surfaced anywhere in the UI, including the
+// detail modal). Plain String#includes works for emoji too since both the
+// query and the blob are compared as-is (UTF-16 code units), no case
+// folding needed beyond .toLowerCase(), which is a no-op on emoji.
+//
+// Multiple terms can be given separated by `;` (e.g. "govee;apple;printer"),
+// each run as its own independent search whose matches are combined (OR'd)
+// together -- not a single search requiring every term. `+` is the other
+// top-level separator, combined the opposite way (AND) -- "govee+printer"
+// requires BOTH sides to match. The two combine into a two-level (CNF-style)
+// expression: `+` is split first (outermost), so each `+`-side can itself
+// still be a `;`-separated OR group -- "a;b+c" means (a OR b) AND c, not
+// (a OR b OR c) or "a OR (b AND c)". A literal `;` or `+` can still be
+// searched for by escaping it (`\;`, `\+`) -- see unescapeFilterText.
+//
+// Within one `;`-alternative, words are further split on whitespace and ALL
+// of them must appear SOMEWHERE in the blob (AND), not necessarily adjacent
+// -- so a multi-word tag like "living room" (or a query like "apple watch")
+// matches regardless of which field each word actually lands in, rather than
+// requiring the exact contiguous phrase. A single word behaves exactly as
+// before.
+function unescapeFilterText(s) {
+  return s.replace(/\\;/g, ';').replace(/\\\+/g, '+');
+}
+
+function parseFilterTerms(raw) {
+  // (?<!\\) below is what makes `\;`/`\+` stick to their group instead of
+  // splitting there -- the escaped separator (backslash and all) rides
+  // along in the piece until unescapeFilterText resolves it, once no more
+  // splitting on it is left to do.
+  return raw.split(/(?<!\\)\+/)
+    .map(andGroup => andGroup.split(/(?<!\\);/)
+      .map(alt => unescapeFilterText(alt).trim().toLowerCase().split(/\s+/).filter(Boolean))
+      .filter(words => words.length > 0))
+    .filter(alts => alts.length > 0);
+}
+
+function applyFilter(windowStart, windowEnd) {
+  const win = windowStart !== undefined ? { start: windowStart, end: windowEnd }
+    : (lastWindow || { start: null, end: null });
+  const terms = parseFilterTerms(document.getElementById('filter-box').value);
+  const notEquals = document.getElementById('filter-mode').value === 'not-equals';
+  // Empty filter box: show everything in both modes -- "not equals" with no
+  // terms to exclude has nothing to hide, so it isn't treated as "hide all".
+  const matches = blob => {
+    if (terms.length === 0) return true;
+    // terms.every: every `+`-separated group must match (AND). alts.some:
+    // within a group, any one `;`-alternative matching is enough (OR).
+    // words.every: within an alternative, every whitespace-split word must
+    // appear (AND) -- see parseFilterTerms.
+    const isMatch = terms.every(alts => alts.some(words => words.every(w => blob.includes(w))));
+    return notEquals ? !isMatch : isMatch;
+  };
+  if (viewMode === 'points') {
+    let points = (allPoints || []).filter(p => matches(p.search));
+    points = limitToTopAddresses(points, () => 1);
+    renderPoints(points, win.start, win.end);
+  } else {
+    let dots = (allDots || []).filter(d => matches(d.search));
+    dots = limitToTopAddresses(dots, d => d.obs_count || 0);
+    render(dots, win.start, win.end);
+  }
+}
+
+// Sum of obs_count (adverts folded into each session) across every session
+// for a device -- the actual number of BLE advertisements captured, not just
+// the number of presence windows (sessions) it was split into.
+function advertCount(sessions) {
+  return sessions.reduce((sum, d) => sum + (d.obs_count || 0), 0);
+}
+
+// uuid_count is a per-device total (distinct advertised service UUIDs),
+// already the same value on every session row for that address -- not
+// summed like advertCount, just read off any one of them.
+function uuidCount(sessions) {
+  return sessions[0].uuid_count || 0;
+}
+
+// service_data_bytes is likewise a per-device total (sum of every distinct
+// service-data payload's byte length ever seen, see app.py's `sdh` join) --
+// same already-replicated-per-row pattern as uuid_count above.
+function serviceDataBytes(sessions) {
+  return sessions[0].service_data_bytes || 0;
+}
+
+// Most recent RSSI reading for a device: rssi_last off whichever session
+// ends latest (sessions aren't guaranteed sorted by end time -- only by
+// first_seen_at from the SQL ORDER BY), not just the last array entry.
+function lastRssi(sessions) {
+  return sessions.reduce((best, d) => (d.endMs > best.endMs ? d : best)).rssi_last;
+}
+
+// Points-view counterpart of lastRssi: rssi off whichever observation was
+// seen latest (items aren't guaranteed sorted -- only by seen_at from the
+// SQL ORDER BY).
+function lastRssiPoint(items) {
+  return items.reduce((best, p) => (p.seenMs > best.seenMs ? p : best)).rssi;
+}
+
+// Earliest/latest presence for a device across every session in the current
+// view -- not just its first/last session, since a device can have several
+// disjoint sessions (gaps longer than bluez_monitor.py's SESSION_TIMEOUT).
+function firstSeenMs(sessions) {
+  return Math.min(...sessions.map(d => d.startMs));
+}
+function lastSeenMs(sessions) {
+  return Math.max(...sessions.map(d => d.endMs));
+}
+
+// Points-view counterparts: earliest/latest individual observation instead
+// of session start/end.
+function firstSeenMsPoint(items) {
+  return Math.min(...items.map(p => p.seenMs));
+}
+function lastSeenMsPoint(items) {
+  return Math.max(...items.map(p => p.seenMs));
+}
+
+// Column display for an absolute first/last-seen timestamp -- always shows
+// both date and time (unlike formatTick's axis labels, which drop the date
+// once the visible span is under a day), since a row's timestamp can't lean
+// on neighboring ticks for context the way an axis label can.
+function formatCellTime(ms) {
+  return new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// Same normalized display as formatCellTime, just taking the raw ISO string
+// timestamps the device modal gets from the API (First/Last seen, service
+// data entries) come as, instead of each rendering the bare ISO string.
+function formatIsoTime(iso) {
+  return iso ? formatCellTime(Date.parse(iso)) : '—';
+}
+
+// Same as formatIsoTime, but with seconds -- used only by the RSSI history
+// table (renderRssiHistoryTable), where readings can land less than a
+// minute apart and minute-only resolution would show duplicate timestamps.
+function formatIsoTimeWithSeconds(iso) {
+  if (!iso) return '—';
+  return new Date(Date.parse(iso)).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+}
+
+// Per-row values for every sortable/displayable optional column, computed
+// once per address and shared by both the sort comparator and the cell
+// renderer (see sortRows/pushRowCells) instead of recomputing per column.
+// `items` is a device's sessions (window view) or raw observations (points
+// view) -- the two views' worth of otherwise-identical metrics differ only
+// in which underlying helper computes them (e.g. advertCount vs items.length),
+// not in shape, so render()/renderPoints() can share everything downstream
+// of this.
+function rowMetrics(view, items) {
+  if (view === 'points') {
+    return {
+      count: items.length,
+      rssi: lastRssiPoint(items),
+      uuid: uuidCount(items),
+      first_seen: firstSeenMsPoint(items),
+      last_seen: lastSeenMsPoint(items),
+      service_data: serviceDataBytes(items),
+      chrono: Math.min(...items.map(x => x.seenMs)),
+    };
+  }
+  return {
+    count: advertCount(items),
+    rssi: lastRssi(items),
+    uuid: uuidCount(items),
+    first_seen: firstSeenMs(items),
+    last_seen: lastSeenMs(items),
+    service_data: serviceDataBytes(items),
+    chrono: Math.min(...items.map(x => x.startMs)),
+  };
+}
+
+// Sorts by the single active column (sortState.key/dir, see setSort),
+// falling back to chronological (earliest session/observation first) when
+// nothing is sorted -- same default as before this was consolidated from six
+// separate *SortDir variables into one.
+function sortRows(rows) {
+  const { key, dir } = sortState;
+  if (!key || !dir) return [...rows].sort((a, b) => a.chrono - b.chrono);
+  const isString = key === 'alias' || key === 'mac' || key === 'tags';
+  return [...rows].sort((a, b) => {
+    let av, bv;
+    if (key === 'alias') {
+      av = (a.first.alias || a.address).toLowerCase();
+      bv = (b.first.alias || b.address).toLowerCase();
+    } else if (key === 'mac') {
+      av = a.address.toLowerCase();
+      bv = b.address.toLowerCase();
+    } else if (key === 'tags') {
+      av = (a.first.tags || []).join(', ').toLowerCase();
+      bv = (b.first.tags || []).join(', ').toLowerCase();
+    } else {
+      av = a[key];
+      bv = b[key];
+    }
+    if (isString) {
+      const diff = av < bv ? -1 : av > bv ? 1 : 0;
+      return dir === 'asc' ? diff : -diff;
+    }
+    const diff = (av ?? -Infinity) - (bv ?? -Infinity);
+    return dir === 'desc' ? -diff : diff;
+  });
+}
+
+// Cycles the clicked column through its sort states -- asc-first for
+// name-like columns (alias, mac), desc-first for magnitude-like ones
+// (count/rssi/uuid/first_seen/last_seen) -- then back to unsorted
+// (chronological), matching each column's original click-to-cycle behavior
+// from when this was six separate *SortDir variables. Clicking a different
+// column always starts it fresh, discarding whatever the previous column's
+// direction was.
+function setSort(key) {
+  const ascFirst = SORT_ASC_FIRST_KEYS.has(key);
+  const firstDir = ascFirst ? 'asc' : 'desc';
+  if (sortState.key !== key) {
+    sortState = { key, dir: firstDir };
+  } else if (sortState.dir === firstDir) {
+    sortState = { key, dir: ascFirst ? 'desc' : 'asc' };
+  } else {
+    sortState = { key: null, dir: null };
+  }
+  applyFilter();
+}
+
+// Header row for the optional columns (Alias's own header is pushed
+// separately by the caller, since it's always present) -- shared by
+// render()/renderPoints(). `countHint` differs by view (see callers).
+function pushColumnHeaders(svg, layout, countHint) {
+  for (const { key, def, colEnd } of layout.columns) {
+    const active = sortState.key === key;
+    const arrow = active ? (sortState.dir === 'desc' ? ' ▼' : ' ▲') : '';
+    const hint = key === 'count' ? countHint : def.hint;
+    svg.push(
+      `<text class="col-header ${def.headerClass}" data-sort-key="${key}" x="${colEnd - 10}" y="${TOP_MARGIN - 8}" text-anchor="end">` +
+      `${def.label}${arrow}<title>${hint}</title></text>`
+    );
+  }
+}
+
+// Per-row cells for the optional columns -- shared by render()/renderPoints().
+// `row` carries the metrics from rowMetrics() plus address/first/items;
+// `countHint` is the row-count tooltip, which differs by view.
+function pushRowCells(svg, layout, row, y, rowHeight, countHint) {
+  const ty = y + rowHeight / 2 + 4;
+  for (const { key, def, colEnd } of layout.columns) {
+    const cls = def.timeCell ? 'row-count row-count-time' : 'row-count';
+    const x = colEnd - 10;
+    if (key === 'tags') {
+      const tags = row.first.tags || [];
+      const tagsText = truncate(tags.join(', '), TAGS_MAX_CHARS);
+      svg.push(
+        `<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${tags.length ? escapeXml(tagsText) : '—'}` +
+        `<title>${escapeXml(tags.join(', '))}</title></text>`
+      );
+    } else if (key === 'mac') {
+      svg.push(`<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${escapeXml(row.address)}</text>`);
+    } else if (key === 'first_seen' || key === 'last_seen') {
+      const ms = row[key];
+      svg.push(
+        `<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${formatCellTime(ms)}` +
+        `<title>${escapeXml(new Date(ms).toISOString())}</title></text>`
+      );
+    } else if (key === 'rssi') {
+      svg.push(
+        `<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${row.rssi != null ? row.rssi : '—'}` +
+        `<title>Signal strength of the most recent observation (dBm)</title></text>`
+      );
+    } else if (key === 'uuid') {
+      svg.push(
+        `<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${row.uuid}` +
+        `<title>Distinct observed service UUIDs</title></text>`
+      );
+    } else if (key === 'count') {
+      svg.push(`<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${row.count}<title>${countHint}</title></text>`);
+    } else if (key === 'service_data') {
+      svg.push(
+        `<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${row.service_data} B` +
+        `<title>Total bytes across every distinct service data payload change ever observed</title></text>`
+      );
+    }
+  }
+}
+
+// Draggable resize handle at the right edge of each optional column -- a
+// thin, otherwise-invisible strip (fill="transparent" is still hit-testable
+// in SVG, unlike fill="none") spanning the chart's full height so it stays
+// grabbable next to any row, not just the header. Drawn last (after the row
+// dots -- see callers) so it's the topmost element within its own narrow
+// strip even where a dot happens to sit underneath. Dragging it live-updates
+// that column's width in columnConfig and re-renders (see
+// beginColumnResize/updateColumnResize below); releasing persists the result
+// to column_config via POST /api/columns (see saveColumnWidths), the same
+// endpoint the Settings page's per-column "default width" field writes to.
+const COL_RESIZE_HIT_WIDTH = 8;
+function pushColumnResizeHandles(svg, layout, height) {
+  for (const { key, colEnd } of layout.columns) {
+    svg.push(
+      `<rect class="col-resize-handle" data-resize-key="${key}" ` +
+      `x="${colEnd - COL_RESIZE_HIT_WIDTH / 2}" y="0" width="${COL_RESIZE_HIT_WIDTH}" height="${height}" ` +
+      `fill="transparent"><title>Drag to resize</title></rect>`
+    );
+  }
+}
+
+// Ranks devices by a weight summed across the currently filtered set (total
+// adverts captured for the window view, total individual observations for
+// the points view) and keeps only the top N -- a declutter control, not a
+// change to row order.
+function limitToTopAddresses(items, weightFn) {
+  const enabled = document.getElementById('top-enabled').checked;
+  const topN = Math.max(1, Number(document.getElementById('top-n').value) || 10);
+  document.getElementById('top-n').disabled = !enabled;
+  if (!enabled) return items;
+
+  const counts = new Map();
+  for (const item of items) counts.set(item.address, (counts.get(item.address) || 0) + weightFn(item));
+  const topAddresses = new Set(
+    [...counts.entries()]
+      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+      .slice(0, topN)
+      .map(([address]) => address)
+  );
+  return items.filter(item => topAddresses.has(item.address));
+}
+
+function toDatetimeLocal(date) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function relativeWindow() {
+  const days = Number(document.getElementById('rel-days').value) || 0;
+  const hours = Number(document.getElementById('rel-hours').value) || 0;
+  const minutes = Number(document.getElementById('rel-minutes').value) || 0;
+  const totalMs = (days * 86400 + hours * 3600 + minutes * 60) * 1000;
+  const end = new Date();
+  return { start: new Date(end.getTime() - totalMs), end };
+}
+
+function setTimeMode(mode) {
+  document.getElementById('relative-fields').style.display = mode === 'relative' ? '' : 'none';
+  document.getElementById('absolute-fields').style.display = mode === 'absolute' ? '' : 'none';
+  const absStart = document.getElementById('abs-start');
+  const absEnd = document.getElementById('abs-end');
+  if (mode === 'absolute' && !absStart.value && !absEnd.value) {
+    const { start, end } = relativeWindow();
+    absStart.value = toDatetimeLocal(start);
+    absEnd.value = toDatetimeLocal(end);
+  }
+}
+
+// Automatic decoding of Service Data payloads for well-documented public
+// formats (Eddystone, Fast Pair's simple 3-byte Model ID form, Battery
+// Level) -- those are the only specs decoded with any confidence. Anything
+// else (vendor-private UUIDs like Tuya/Samsung/HP's, or a recognized UUID
+// whose payload doesn't match the expected shape) falls back to a raw
+// byte-for-byte ASCII rendering (unquoted -- same as every other decoded
+// branch here, no special formatting calling it out as a guess) instead of
+// showing nothing: printable bytes pass through as-is, everything else
+// becomes '·'. It's frequently garbage (most payloads aren't text at all),
+// but costs nothing to show.
+// None of these branches label their own decoding format (no "Eddystone-
+// TLM —"/"Hex to ASCII —" prefix) -- the entry's uuid/name (see
+// serviceDataHtml) already identifies it, so the decoded text itself is all
+// that's shown.
+const BT_BASE_UUID_SUFFIX = '-0000-1000-8000-00805f9b34fb';
+
+function shortUuid(uuid) {
+  const u = uuid.toLowerCase();
+  return (u.length === 36 && u.startsWith('0000') && u.endsWith(BT_BASE_UUID_SUFFIX))
+    ? u.slice(4, 8).toUpperCase()
+    : null;
+}
+
+function hexToBytes(hex) {
+  const bytes = [];
+  for (let i = 0; i + 1 < hex.length; i += 2) bytes.push(parseInt(hex.substr(i, 2), 16));
+  return bytes;
+}
+
+function int8(b) { return b > 127 ? b - 256 : b; }
+function int16(b) { return b > 32767 ? b - 65536 : b; }
+function bytesToHex(bytes) { return bytes.map(b => b.toString(16).padStart(2, '0')).join(''); }
+
+const EDDYSTONE_URL_SCHEMES = ['http://www.', 'https://www.', 'http://', 'https://'];
+const EDDYSTONE_URL_EXPANSIONS = [
+  '.com/', '.org/', '.edu/', '.net/', '.info/', '.biz/', '.gov/',
+  '.com', '.org', '.edu', '.net', '.info', '.biz', '.gov',
+];
+
+function decodeEddystoneUrl(bytes) {
+  let out = '';
+  for (const b of bytes) {
+    out += (b < EDDYSTONE_URL_EXPANSIONS.length) ? EDDYSTONE_URL_EXPANSIONS[b] : String.fromCharCode(b);
+  }
+  return out;
+}
+
+function decodeEddystone(bytes) {
+  if (bytes.length === 0) return null;
+  const frameType = bytes[0];
+  if (frameType === 0x00 && bytes.length >= 18) {
+    const txPower = int8(bytes[1]);
+    const namespace = bytesToHex(bytes.slice(2, 12));
+    const instance = bytesToHex(bytes.slice(12, 18));
+    return `Tx power ${txPower} dBm, namespace ${namespace}, instance ${instance}`;
+  }
+  if (frameType === 0x10 && bytes.length >= 3) {
+    const txPower = int8(bytes[1]);
+    const scheme = EDDYSTONE_URL_SCHEMES[bytes[2]] || '';
+    const url = scheme + decodeEddystoneUrl(bytes.slice(3));
+    return `Tx power ${txPower} dBm, ${escapeXml(url)}`;
+  }
+  if (frameType === 0x20 && bytes.length >= 14) {
+    const batteryMv = (bytes[2] << 8) | bytes[3];
+    const temp = int16((bytes[4] << 8) | bytes[5]) / 256;
+    const advCount = (bytes[6] * 16777216) + (bytes[7] * 65536) + (bytes[8] * 256) + bytes[9];
+    const uptimeDs = (bytes[10] * 16777216) + (bytes[11] * 65536) + (bytes[12] * 256) + bytes[13];
+    return `battery ${batteryMv} mV, temp ${temp.toFixed(1)}°C, ` +
+      `${advCount} adverts sent, uptime ${(uptimeDs / 10).toFixed(1)}s`;
+  }
+  if (frameType === 0x30) {
+    return `encrypted ephemeral ID ${bytesToHex(bytes.slice(1))}`;
+  }
+  return null;
+}
+
+// Non-printable bytes (anything outside 0x20-0x7E) become '·' rather than
+// being dropped, so the guess stays byte-for-byte and the reader can see
+// where the non-text stretches are instead of a silently shortened string.
+function bytesToAscii(bytes) {
+  return bytes.map(b => (b >= 0x20 && b <= 0x7e) ? String.fromCharCode(b) : '·').join('');
+}
+
+function decodeServiceData(uuid, hex) {
+  const bytes = hexToBytes(hex);
+  const short = shortUuid(uuid);
+  if (short === 'FEAA') {
+    const eddystone = decodeEddystone(bytes);
+    if (eddystone) return eddystone;
+  }
+  if (short === 'FE2C' && bytes.length === 3) return `Model ID ${bytesToHex(bytes)}`;
+  if (short === '180F' && bytes.length === 1) return `${bytes[0]}%`;
+  if (bytes.length === 0) return null;
+  return escapeXml(bytesToAscii(bytes));
+}
+
+// `u.solicited` (set when merging in info.solicited_uuids -- see
+// renderDeviceInfo) marks an entry as a solicited UUID rather than an
+// advertised one; the two used to render as separate sections, now combined
+// into one, with this as the only remaining way to tell them apart.
+function uuidList(list) {
+  if (list.length === 0) return '<li class="muted">None observed</li>';
+  return list.map(u =>
+    `<li>${u.icon ? escapeXml(u.icon) + ' ' : ''}<code>${escapeXml(u.uuid)}</code>` +
+    (u.name ? ` — ${escapeXml(u.name)} (${escapeXml(u.type)})` : '') +
+    (u.solicited ? ' <span class="muted">— solicited</span>' : '') +
+    '</li>'
+  ).join('');
+}
+
+// Plain table of this device's last RSSI_HISTORY_LIMIT (app.py) readings,
+// newest first -- same row-per-event, spreadsheet-like presentation as
+// Alias history/Service data above it, replacing the line graph this used
+// to be (dropped in favor of just reading the last 10 events directly,
+// rather than a trend line).
+function renderRssiHistoryTable(history) {
+  if (!history.length) return '<div class="muted">None observed</div>';
+  const rows = history.map(p =>
+    `<tr><td>${formatIsoTimeWithSeconds(p.seen_at)}</td><td>${p.rssi} dBm</td></tr>`
+  ).join('');
+  // thead/tbody (not one flat run of <tr>s) so the header row is excluded
+  // from tbody tr:nth-child's zebra striping below -- otherwise the header
+  // would count as row 1 and throw off which data rows land on/off-band.
+  return (
+    '<table class="rssi-history-table">' +
+    '<thead><tr><th>Time</th><th>RSSI</th></tr></thead>' +
+    `<tbody>${rows}</tbody>` +
+    '</table>'
+  );
+}
+
+// Tracks which device the currently-open modal belongs to, so the tag
+// add/remove handlers (delegated on #modal-backdrop, since the modal body
+// gets replaced wholesale on every render) know which address to hit.
+let currentDeviceAddress = null;
+// Refreshes the open device modal (full device info -- tags, UUIDs,
+// classifications, etc, see refreshModal -- plus the Connect/Disconnect
+// button's live state, see refreshConnectStatus) every MODAL_REFRESH_POLL_MS
+// while it's open (see openModal/closeModal), so newly-observed data and
+// bluez_monitor.py's real, possibly-slow-to-settle BlueZ connection state
+// both show up without the user having to close and reopen it. Cleared on
+// close so it doesn't keep firing (and touching stale elements) against a
+// device whose modal isn't even open anymore.
+let modalRefreshTimer = null;
+const MODAL_REFRESH_POLL_MS = 2000;
+// Service data history can get long (record_service_data logs every
+// observation, not just payload changes) -- the modal only ever shows the
+// most recent SERVICE_DATA_MODAL_LIMIT of them, newest first; anything older
+// is just omitted rather than paginated.
+const SERVICE_DATA_MODAL_LIMIT = 100;
+// The most recently rendered device-info payload (JSON string, for a cheap
+// deep-equality check) and Connect/Disconnect state, both reset per device
+// on open/close -- see refreshModal/renderConnectButton. Comparing against
+// this is what lets a refresh tick that found nothing new skip touching the
+// DOM at all, instead of unconditionally tearing down and rebuilding
+// #modal-body (and its scroll position, hover states, etc) every single
+// tick regardless of whether anything actually changed.
+let lastDeviceInfoJson = null;
+let lastConnectState = null;
+
+function renderTagPills(tags) {
+  return (tags || []).map(t =>
+    `<span class="tag-pill">${escapeXml(t)}` +
+    `<button type="button" data-tag="${escapeXml(t)}" aria-label="Remove tag">&times;</button></span>`
+  ).join('');
+}
+
+function setTagError(message) {
+  const el = document.getElementById('tag-error');
+  if (el) el.textContent = message || '';
+}
+
+// Disable the input and swap its placeholder for the duration of a tag
+// write, rather than leaving it looking idle -- also guards against a
+// double-submit if Enter gets pressed again before the first request lands.
+function setTagInputBusy(busy) {
+  const input = document.getElementById('tag-input');
+  if (!input) return;
+  input.disabled = busy;
+  if (busy) {
+    input.dataset.prevPlaceholder = input.placeholder;
+    input.placeholder = 'Saving…';
+  } else if (input.dataset.prevPlaceholder) {
+    input.placeholder = input.dataset.prevPlaceholder;
+  }
+}
+
+async function addTag(tag) {
+  if (!currentDeviceAddress) return;
+  setTagInputBusy(true);
+  try {
+    const res = await fetch(`/api/device/${encodeURIComponent(currentDeviceAddress)}/tags`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setTagError(data.error || 'Failed to add tag.');
+      return;
+    }
+    setTagError('');
+    document.getElementById('tag-pills').innerHTML = renderTagPills(data.tags);
+  } catch (err) {
+    setTagError('Failed to add tag.');
+  } finally {
+    setTagInputBusy(false);
+  }
+}
+
+async function removeTag(tag) {
+  if (!currentDeviceAddress) return;
+  setTagInputBusy(true);
+  try {
+    const res = await fetch(
+      `/api/device/${encodeURIComponent(currentDeviceAddress)}/tags/${encodeURIComponent(tag)}`,
+      { method: 'DELETE' },
+    );
+    if (res.ok) {
+      const data = await res.json();
+      document.getElementById('tag-pills').innerHTML = renderTagPills(data.tags);
+    }
+  } catch (err) {
+    // best-effort -- leave the pill in place if the request failed
+  } finally {
+    setTagInputBusy(false);
+  }
+}
+
+// Two-column layout: #sidebar (identity, Observations stat, compact
+// address/manufacturer/appearance/seen-at table) + #content (Classification,
+// UUIDs, Service data, and Tags last -- see mockup-modal-2.html). Both
+// become direct grid children of #modal via #modal-body's display:contents.
+function renderDeviceInfo(info) {
+  const primary = info.classifications[0];
+  const labelColor = primary ? CATEGORY_COLORS[primary.color] : null;
+  // Every matched category's icon, deduped (OUID + ManufacturerData + a
+  // Service UUID match can all resolve to the same glyph -- see
+  // _icons_string in app.py for the main chart's equivalent dedup), not
+  // just the primary one.
+  const titleIcons = [...new Set(info.classifications.map(c => c.icon).filter(Boolean))].join('');
+  const titleText = (titleIcons ? titleIcons + ' ' : '') + (info.alias || info.address);
+
+  const bearerLabel = {bredr: 'BR/EDR', le: 'BLE'}[info.bearer] || '—';
+
+  // info.rssi is {last, best, avg} (see _device_rssi_stats in app.py) --
+  // each independently null if this device has no RSSI-bearing observation
+  // for that particular stat yet.
+  const formatRssi = value => value != null ? `${value} dBm` : '—';
+  const compactRows = [
+    ['Address', `${escapeXml(info.address)}<br>(${escapeXml(info.address_type)})`],
+    ['Bearer', bearerLabel],
+    ['Manufacturer', info.manufacturer ? escapeXml(info.manufacturer) : '—'],
+    ['Appearance', info.appearance != null ? info.appearance : '—'],
+    ['First seen', formatIsoTime(info.first_seen_at)],
+    ['Last seen', formatIsoTime(info.last_seen_at)],
+  ];
+
+  // org_name/oui are only present for an OUI-sourced match; alias,
+  // manufacturer, and uuid matches aren't tied to any particular
+  // organization (see device_classifications' `source` column) --
+  // manufacturer's/uuid's category_name instead holds the vendor's own name
+  // (e.g. "Apple, Inc.") straight from manufacturerdata_names/uuid_lookups.
+  const classificationsHtml = info.classifications.length
+    ? info.classifications.map(c => {
+        const sourceHtml = c.source === 'ouid'
+          ? `<strong>${escapeXml(c.org_name)}</strong> (${escapeXml(c.oui)})`
+          : c.source === 'manufacturer'
+          ? '<span class="muted">via ManufacturerData</span>'
+          : c.source === 'uuid'
+          ? '<span class="muted">via Service UUID</span>'
+          : '<span class="muted">matched via alias</span>';
+        return `<li>${c.icon || ''} ${sourceHtml}` +
+          (c.category_name ? ` — ${escapeXml(c.category_name)}` : '') +
+          '</li>';
+      }).join('')
+    : '<li class="muted">No classification match</li>';
+
+  // Every distinct alias this device has ever advertised (see ALIAS_HISTORY_
+  // QUERY/device_alias_history), deduplicated to one entry per unique alias
+  // text showing when it was FIRST seen (not every run, e.g. a revert back
+  // to an earlier alias) -- newest unique alias first. Separate from the
+  // sidebar's title/Address table above, which only ever shows the CURRENT
+  // alias (info.alias, devices.alias's latest value).
+  const aliasHistoryHtml = info.alias_history.length
+    ? info.alias_history.map(a =>
+        `<li>${escapeXml(a.alias)} ` +
+        `<span class="muted">(first seen ${formatIsoTime(a.first_seen_at)})</span></li>`
+      ).join('')
+    : '<li class="muted">None observed</li>';
+
+  // Every service data observation ever recorded (see SERVICE_DATA_HISTORY_
+  // QUERY/device_service_data_history), newest first, including exact
+  // repeats (A -> A -> B -> A shows as four lines, not collapsed to two) --
+  // one line per entry, not grouped by uuid, so the timeline reads
+  // chronologically across whichever uuid was actually observed each time.
+  // Capped to the most recent SERVICE_DATA_MODAL_LIMIT entries -- the rest
+  // (older than that) are just omitted, not paginated.
+  const serviceDataHtml = info.service_data.length
+    ? info.service_data.slice(0, SERVICE_DATA_MODAL_LIMIT).map(sd => {
+        const decoded = sd.data_hex ? decodeServiceData(sd.uuid, sd.data_hex) : null;
+        return (
+          `<li><span class="muted">${formatIsoTime(sd.seen_at)}</span> — ` +
+          `<code>${escapeXml(sd.uuid)}</code>` +
+          `: ${decoded ? decoded : '<span class="muted">—</span>'}` +
+          '</li>'
+        );
+      }).join('')
+    : '<li class="muted">None observed</li>';
+
+  // RSSI (last/best/avg) used to live in the sidebar's compact table --
+  // moved in here so it sits alongside the actual history table it
+  // summarizes, rather than split across both sides of the modal.
+  const rssiHistoryTable = renderRssiHistoryTable(info.rssi_history);
+  const rssiSummaryHtml = `
+    <div class="rssi-summary">
+      <span><span class="muted">Last:</span> ${formatRssi(info.rssi.last)}</span>
+      <span><span class="muted">Best:</span> ${formatRssi(info.rssi.best)}</span>
+      <span><span class="muted">Avg:</span> ${formatRssi(info.rssi.avg)}</span>
+    </div>
+  `;
+
+  // Solicited UUIDs used to get their own section -- combined in here now,
+  // each one flagged (see uuidList) so it can still be told apart from a
+  // UUID the device actually advertises offering itself.
+  const advertisedUuids = [
+    ...info.service_uuids,
+    ...info.solicited_uuids.map(u => ({ ...u, solicited: true })),
+  ];
+
+  return `
+    <div id="sidebar">
+      <h2${labelColor ? ` style="color:${labelColor}"` : ''}>${escapeXml(titleText)}</h2>
+      <div class="stat-tile">
+        <div class="stat-label">Observations</div>
+        <div class="stat-value">${(info.observation_count || 0).toLocaleString()}</div>
+      </div>
+      <table class="kv compact">${compactRows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')}</table>
+    </div>
+    <div id="content">
+      <section>
+        <h3>Tags</h3>
+        <div class="tag-pills" id="tag-pills">${renderTagPills(info.tags)}</div>
+        <div class="tag-input-row">
+          <input type="text" id="tag-input" placeholder="Add a tag and press Enter…" maxlength="40">
+        </div>
+        <div class="tag-error" id="tag-error"></div>
+      </section>
+      <section>
+        <h3>Classification</h3>
+        <ul>${classificationsHtml}</ul>
+      </section>
+      <section>
+        <h3>Alias history</h3>
+        <ul>${aliasHistoryHtml}</ul>
+      </section>
+      <section>
+        <h3>Advertised service UUIDs <button type="button" id="connect-btn"></button></h3>
+        <ul>${uuidList(advertisedUuids)}</ul>
+      </section>
+      <section>
+        <h3>Service data</h3>
+        <ul class="service-data-list">${serviceDataHtml}</ul>
+      </section>
+      <section>
+        <h3>RSSI history</h3>
+        ${rssiSummaryHtml}
+        ${rssiHistoryTable}
+      </section>
+    </div>
+  `;
+}
+
+async function openModal(address) {
+  const backdrop = document.getElementById('modal-backdrop');
+  const body = document.getElementById('modal-body');
+  currentDeviceAddress = address;
+  pendingConnectAction = null;
+  lastDeviceInfoJson = null;
+  lastConnectState = null;
+  body.innerHTML = '<p style="grid-column:1/-1">Loading…</p>';
+  backdrop.classList.add('open');
+  try {
+    const res = await fetch('/api/device/' + encodeURIComponent(address));
+    // The user can click a different device (or close the modal) before
+    // this fetch resolves -- currentDeviceAddress has since moved on, so
+    // without this check a slow-to-load device A response landing after a
+    // faster device B has already opened would blow away B's just-rendered
+    // modal with A's info, "bleeding" one device's data into another's still
+    // very much open modal.
+    if (address !== currentDeviceAddress) return;
+    if (!res.ok) {
+      body.innerHTML = '<p style="grid-column:1/-1">Device not found.</p>';
+      return;
+    }
+    const info = await res.json();
+    if (address !== currentDeviceAddress) return;
+    lastDeviceInfoJson = JSON.stringify(info);
+    body.innerHTML = renderDeviceInfo(info);
+  } catch (err) {
+    if (address !== currentDeviceAddress) return;
+    body.innerHTML = '<p style="grid-column:1/-1">Failed to load device info.</p>';
+    return;
+  }
+  refreshConnectStatus(address);
+  clearInterval(modalRefreshTimer);
+  modalRefreshTimer = setInterval(() => refreshModal(address), MODAL_REFRESH_POLL_MS);
+}
+
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('open');
+  currentDeviceAddress = null;
+  pendingConnectAction = null;
+  lastDeviceInfoJson = null;
+  lastConnectState = null;
+  clearInterval(modalRefreshTimer);
+  modalRefreshTimer = null;
+}
+
+// Re-fetches the device info every tick (tags, classifications, UUIDs,
+// service data) but only actually touches the DOM if it differs from what's
+// already drawn (see lastDeviceInfoJson) -- device_appearances' obs_count/
+// last_seen_at alone tick on nearly every advert from an active device, so
+// without this a "nothing meaningful changed" tick would still tear down
+// and rebuild the whole #modal-body every time, resetting #content's
+// scroll position and flashing the Connect/Disconnect button blank (its
+// label/state lives in the button element itself, which a full teardown
+// destroys and recreates from scratch) -- both read as "jittery", not just
+// look mildly janky.
+//
+// Entirely skipped while the user has the tag input focused -- mid-typing a
+// new tag, or just having pressed Enter on one (see addTag, which doesn't
+// blur it afterward) -- since blowing away #modal-body out from under them
+// would lose their keystrokes/cursor position outright regardless of
+// whether the fetched info actually changed. Re-checked after the fetch
+// too, in case they started typing while it was in flight.
+//
+// refreshConnectStatus always still runs (skipped render or not): it only
+// ever touches the Connect/Disconnect button itself, never the tag input,
+// so there's nothing to protect it from either way.
+async function refreshModal(address) {
+  if (address !== currentDeviceAddress) return;
+  const tagInputFocused = () => document.activeElement === document.getElementById('tag-input');
+  if (!tagInputFocused()) {
+    try {
+      const res = await fetch('/api/device/' + encodeURIComponent(address));
+      if (res.ok && address === currentDeviceAddress && !tagInputFocused()) {
+        const info = await res.json();
+        const infoJson = JSON.stringify(info);
+        if (infoJson !== lastDeviceInfoJson) {
+          lastDeviceInfoJson = infoJson;
+          const contentEl = document.getElementById('content');
+          const scrollTop = contentEl ? contentEl.scrollTop : 0;
+          document.getElementById('modal-body').innerHTML = renderDeviceInfo(info);
+          // Restores the button's last-known label/state synchronously,
+          // before refreshConnectStatus's network round trip below even
+          // starts -- otherwise the freshly-recreated button would sit
+          // completely blank (no text, no data-state) for that entire gap.
+          if (lastConnectState) renderConnectButton(lastConnectState);
+          const newContentEl = document.getElementById('content');
+          if (newContentEl) newContentEl.scrollTop = scrollTop;
+        }
+      }
+    } catch (err) {
+      // Leave the modal as-is; the next poll retries.
+    }
+  }
+  refreshConnectStatus(address);
+}
+
+// Set the instant a Connect/Disconnect click fires (see toggleConnection),
+// cleared once the poll below sees the backend catch up to it. bluez_
+// monitor.py only picks up a connect/disconnect request every couple of
+// seconds (see poll_connect_requests there) -- not instantly -- so without
+// this, a poll landing in that gap would still be reporting the device's
+// PREVIOUS state and would flicker the button back to it for a moment
+// before the backend's own state finally catches up.
+let pendingConnectAction = null; // null | 'connect' | 'disconnect'
+
+// address is passed explicitly (rather than reading currentDeviceAddress at
+// call time) so a response that resolves after the user has since closed the
+// modal, or opened a different device's, can be told apart from a current
+// one and dropped -- see the address !== currentDeviceAddress guard below.
+async function refreshConnectStatus(address) {
+  const btn = document.getElementById('connect-btn');
+  if (!btn || address !== currentDeviceAddress) return;
+  try {
+    const res = await fetch(`/api/device/${encodeURIComponent(address)}/connect-status`);
+    const data = await res.json();
+    if (address !== currentDeviceAddress) return;
+    // See pendingConnectAction above: ignore a poll response that's stale
+    // relative to a click already in flight, rather than visibly reverting
+    // to it for a moment.
+    if (pendingConnectAction === 'connect' && data.state === 'disconnected') return;
+    if (pendingConnectAction === 'disconnect' && data.state !== 'disconnected') return;
+    pendingConnectAction = null;
+    // Captured before renderConnectButton overwrites lastConnectState, so a
+    // real transition can be told apart from just re-confirming the same
+    // state on the next poll tick. previousState === null means this is the
+    // modal's first-ever status check for this device (see openModal) --
+    // skipped so reopening the modal on an already-connected device doesn't
+    // toast "Connection successful" for a connection that isn't new.
+    const previousState = lastConnectState;
+    renderConnectButton(data.state);
+    if (previousState !== null && previousState !== data.state) {
+      if (data.state === 'connected') {
+        showToast(`Connection successful: ${address}`);
+      } else if (data.state === 'disconnected' && previousState === 'connected') {
+        showToast(`Device disconnected: ${address}`, { variant: 'disconnected' });
+      } else if (data.state === 'disconnected' && previousState === 'connecting') {
+        // bluez_monitor.py never reports a connect as a hard failure (see
+        // CONNECT_BUTTON_LABELS' own comment) -- it just gives up waiting
+        // and quietly reverts to 'disconnected' (_connect_timeout there).
+        // From here though, connecting->disconnected with no 'connected' in
+        // between IS distinguishable from a real disconnect (previousState
+        // above would be 'connected' for that), so it's worth its own toast
+        // rather than looking identical to one.
+        showToast(`Connection unsuccessful: ${address}`, { variant: 'unsuccessful' });
+      }
+    }
+  } catch (err) {
+    // Leave the button as-is; the next poll retries.
+  }
+}
+
+// Address -> last-known connect state from the poll below, kept separate
+// from currentDeviceAddress/lastConnectState above (those only track
+// whichever single device's modal happens to be open right now). null until
+// pollGlobalConnectStatuses' first tick has actually run, so that first
+// tick can seed this without toasting for devices that were already
+// connected/connecting before the page ever loaded.
+let globalConnectStates = null;
+
+// Polls EVERY device's connect state, unlike refreshConnectStatus above
+// (one address, only while its modal is open) -- so a background auto-
+// connect/disconnect (see auto_connect_latest_tick in bluez_monitor.py)
+// still toasts even with no device modal open at all, or one open on a
+// different device. Runs unconditionally from page load (see
+// GLOBAL_CONNECT_POLL_MS below), not gated behind the auto-refresh toggle:
+// that toggle only controls re-loading the graph/table and has nothing to
+// do with connect events.
+async function pollGlobalConnectStatuses() {
+  try {
+    const res = await fetch('/api/device-connections');
+    const data = await res.json();
+    const previous = globalConnectStates;
+    globalConnectStates = data;
+    if (previous === null) return; // seed-only tick, see globalConnectStates above
+    for (const [address, { state }] of Object.entries(data)) {
+      // currentDeviceAddress's own transitions are already toasted by
+      // refreshConnectStatus's poll -- skipped here so a manual Connect/
+      // Disconnect with that device's modal open doesn't toast twice.
+      if (address === currentDeviceAddress) continue;
+      const prevState = previous[address] ? previous[address].state : 'disconnected';
+      if (prevState === state) continue;
+      if (state === 'connected') {
+        showToast(`Connection successful: ${address}`);
+      } else if (state === 'disconnected' && prevState === 'connected') {
+        showToast(`Device disconnected: ${address}`, { variant: 'disconnected' });
+      } else if (state === 'disconnected' && prevState === 'connecting') {
+        // Same "gave up waiting, never a hard failure" case refreshConnectStatus
+        // documents above.
+        showToast(`Connection unsuccessful: ${address}`, { variant: 'unsuccessful' });
+      }
+    }
+  } catch (err) {
+    // Leave globalConnectStates as its last-known value; the next poll retries.
+  }
+}
+
+const GLOBAL_CONNECT_POLL_MS = 2000;
+
+const TOAST_VISIBLE_MS = 3000;
+const TOAST_FADE_MS = 200;
+
+// Brief, non-blocking status popup (see #toast-container's own CSS comment)
+// -- deliberately not window.alert(): a real device Connect/Disconnect
+// isn't important enough to block the whole page on a modal dialog the user
+// has to dismiss, especially since bluez_monitor.py can report it well
+// after the click that triggered it (see refreshConnectStatus's polling).
+function showToast(message, opts) {
+  const toast = document.createElement('div');
+  toast.className = 'toast' + (opts && opts.variant ? ` toast-${opts.variant}` : '');
+  toast.textContent = message;
+  document.getElementById('toast-container').appendChild(toast);
+  // Rendered hidden first, then flipped to visible on the next frame so the
+  // opacity/transform transition actually animates in, rather than starting
+  // already at its end state.
+  requestAnimationFrame(() => toast.classList.add('toast-visible'));
+  setTimeout(() => {
+    toast.classList.remove('toast-visible');
+    setTimeout(() => toast.remove(), TOAST_FADE_MS);
+  }, TOAST_VISIBLE_MS);
+}
+
+// No 'error' state: bluez_monitor.py never reports a connect as failed (see
+// _connect_timeout there) -- a profile/security-level hiccup along the way
+// (e.g. a device requiring bonding for one particular profile) isn't the
+// same thing as the connection itself failing, so the only states that
+// ever actually reach here are these three.
+const CONNECT_BUTTON_LABELS = {
+  disconnected: 'Connect', connecting: 'Connecting…', connected: 'Disconnect',
+};
+
+function renderConnectButton(state) {
+  const btn = document.getElementById('connect-btn');
+  if (!btn) return;
+  lastConnectState = state;
+  btn.textContent = CONNECT_BUTTON_LABELS[state] || 'Connect';
+  btn.disabled = state === 'connecting';
+  btn.dataset.state = state;
+}
+
+// Connect and Disconnect behave differently here, matching bluez_monitor.py
+// (see its connect_device/disconnect_device docstrings):
+//  - Connect shows "Connecting…" right away, then waits for the ongoing
+//    poll (see refreshConnectStatus/pendingConnectAction) to confirm real
+//    success/failure -- there's something concrete to wait for.
+//  - Disconnect is best-effort: a device that's already out of range may
+//    never confirm it, so this doesn't wait for confirmation at all -- it
+//    goes straight back to "Connect", same as bluez_monitor.py firing the
+//    bluetoothctl disconnect and immediately moving on regardless.
+function toggleConnection() {
+  const address = currentDeviceAddress;
+  const btn = document.getElementById('connect-btn');
+  if (!address || !btn) return;
+  const disconnecting = btn.dataset.state === 'connected';
+  pendingConnectAction = disconnecting ? 'disconnect' : 'connect';
+  renderConnectButton(disconnecting ? 'disconnected' : 'connecting');
+  // Toasted here, not left for refreshConnectStatus to notice: disconnect is
+  // optimistic (see renderConnectButton call above) and jumps straight to
+  // 'disconnected' before any poll confirms it, so by the time the next poll
+  // runs, lastConnectState is already 'disconnected' and there's no
+  // connected->disconnected transition left for it to detect. This only
+  // covers a user-initiated disconnect -- a device that drops on its own
+  // (out of range, etc) without this button ever being clicked still gets
+  // toasted by refreshConnectStatus's own transition check.
+  if (disconnecting) showToast(`Device disconnected: ${address}`, { variant: 'disconnected' });
+  fetch(`/api/device/${encodeURIComponent(address)}/${disconnecting ? 'disconnect' : 'connect'}`, {
+    method: 'POST',
+  }).catch(() => {
+    // Best-effort -- the ongoing connect-status poll reconciles either way.
+  });
+}
+
+// Settings is a real page (/settings), not a modal -- this dropdown just
+// toggles open/closed; the "Settings" item inside is a plain <a>.
+function toggleSettingsMenu(show) {
+  const menu = document.getElementById('settings-menu');
+  const open = show === undefined ? !menu.classList.contains('open') : show;
+  menu.classList.toggle('open', open);
+  document.getElementById('hamburger-btn').setAttribute('aria-expanded', String(open));
+}
+
+document.getElementById('chart-wrap').addEventListener('click', (e) => {
+  const label = e.target.closest('.row-label');
+  if (label) { openModal(label.dataset.address); return; }
+  const header = e.target.closest('.col-header[data-sort-key]');
+  if (header) setSort(header.dataset.sortKey);
+});
+
+// Live column-width drag-resize (see pushColumnResizeHandles). Tracked as
+// plain module state rather than per-element listeners since the handle
+// rects are destroyed and recreated on every render() -- a single
+// mousedown/mousemove/mouseup triple attached once on chart-wrap/window
+// survives that churn, unlike listeners bound to the (short-lived) rects
+// themselves.
+let columnResize = null; // { key, startX, startWidth }
+let columnResizeRafPending = false;
+
+document.getElementById('chart-wrap').addEventListener('mousedown', (e) => {
+  const handle = e.target.closest('.col-resize-handle');
+  if (!handle) return;
+  e.preventDefault();
+  const entry = columnConfig.find(c => c.key === handle.dataset.resizeKey);
+  const def = COLUMN_DEFS[handle.dataset.resizeKey];
+  if (!entry || !def) return;
+  columnResize = { key: handle.dataset.resizeKey, startX: e.clientX, startWidth: entry.width || def.width };
+  document.body.classList.add('column-resizing');
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!columnResize) return;
+  const entry = columnConfig.find(c => c.key === columnResize.key);
+  if (!entry) return;
+  const delta = e.clientX - columnResize.startX;
+  const width = Math.round(columnResize.startWidth + delta);
+  entry.width = Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, width));
+  // Re-rendering on every mousemove (rather than once per animation frame)
+  // can outpace the browser on a large device list -- coalesce to at most
+  // one render per frame, same reasoning as any other high-frequency input.
+  if (!columnResizeRafPending) {
+    columnResizeRafPending = true;
+    requestAnimationFrame(() => {
+      columnResizeRafPending = false;
+      if (allDots || allPoints) applyFilter();
+    });
+  }
+});
+
+window.addEventListener('mouseup', () => {
+  if (!columnResize) return;
+  columnResize = null;
+  document.body.classList.remove('column-resizing');
+  saveColumnWidths();
+});
+
+// Persists the whole columnConfig (order + visibility unchanged, only the
+// dragged column's width differs) via the same endpoint the Settings page's
+// column list writes to -- best-effort: the width is already applied
+// locally regardless of whether this save succeeds, so a failure here just
+// means the drag doesn't survive a reload.
+async function saveColumnWidths() {
+  try {
+    await fetch('/api/columns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ columns: columnConfig }),
+    });
+  } catch (err) {
+    // Best-effort, see above.
+  }
+}
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal-backdrop').addEventListener('click', (e) => {
+  if (e.target.id === 'modal-backdrop') { closeModal(); return; }
+  const removeBtn = e.target.closest('.tag-pill button');
+  if (removeBtn) { removeTag(removeBtn.dataset.tag); return; }
+  if (e.target.id === 'connect-btn') toggleConnection();
+});
+document.getElementById('modal-backdrop').addEventListener('keydown', (e) => {
+  if (e.target.id === 'tag-input' && e.key === 'Enter') {
+    e.preventDefault();
+    const value = e.target.value.trim();
+    if (!value) return;
+    addTag(value).then(() => { e.target.value = ''; });
+  }
+});
+document.getElementById('hamburger-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleSettingsMenu();
+});
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('menu-wrap').contains(e.target)) toggleSettingsMenu(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { closeModal(); toggleSettingsMenu(false); }
+});
+
+window.addEventListener('resize', () => {
+  if (viewMode === 'points' ? allPoints : allDots) applyFilter();
+});
+document.getElementById('refresh').addEventListener('click', loadData);
+
+// Untoggled by default -- autoRefreshTimer stays null until the user clicks
+// the button, no init call needed to leave it off. play/pause icon swap and
+// the .active style are the only state this needs; loadData() itself
+// already re-renders in place, no page reload.
+const AUTO_REFRESH_INTERVAL_MS = 2000;
+const AUTO_REFRESH_PLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z"/></svg>';
+const AUTO_REFRESH_PAUSE_ICON = '<svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
+let autoRefreshTimer = null;
+
+function setAutoRefreshActive(active) {
+  const btn = document.getElementById('auto-refresh-toggle');
+  btn.classList.toggle('active', active);
+  btn.setAttribute('aria-pressed', String(active));
+  btn.innerHTML = active ? AUTO_REFRESH_PAUSE_ICON : AUTO_REFRESH_PLAY_ICON;
+  btn.title = active ? 'Stop auto-refresh' : 'Auto-refresh every 2 seconds';
+  if (active) {
+    autoRefreshTimer = setInterval(loadData, AUTO_REFRESH_INTERVAL_MS);
+  } else if (autoRefreshTimer) {
+    clearInterval(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
+}
+document.getElementById('auto-refresh-toggle').addEventListener('click', () => {
+  setAutoRefreshActive(autoRefreshTimer === null);
+});
+
+document.getElementById('view-mode').addEventListener('change', (e) => {
+  viewMode = e.target.value;
+  loadData();
+});
+document.getElementById('time-mode').addEventListener('change', (e) => setTimeMode(e.target.value));
+document.getElementById('filter-box').addEventListener('input', () => applyFilter());
+document.getElementById('filter-mode').addEventListener('change', () => applyFilter());
+document.getElementById('top-enabled').addEventListener('change', () => applyFilter());
+document.getElementById('top-n').addEventListener('input', () => applyFilter());
+document.getElementById('graph-height').addEventListener('input', (e) => {
+  const value = e.target.value.trim();
+  customGraphHeight = value === '' ? null : Number(value);
+  if (viewMode === 'points' ? allPoints : allDots) applyFilter();
+});
+
+setTimeMode('relative');
+loadColumnConfig().then(loadData);
+pollGlobalConnectStatuses();
+setInterval(pollGlobalConnectStatuses, GLOBAL_CONNECT_POLL_MS);
+</script>
+</body>
+</html>

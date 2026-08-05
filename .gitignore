@@ -1,0 +1,15 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime data
+data/DBs/bluetooth.db
+data/DBs/bluetooth_histories.db
+data/DBs/settings.db
+data/errors.log
+
+# Claude Code
+.claude/

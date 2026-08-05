@@ -1,0 +1,1250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings — Bluetooth Demystifier</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    margin: 0; background: #0a0d11; color: #cfd8e0; font-size: 13px;
+  }
+  header {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.55rem 1rem; border-bottom: 1px solid #1a232c;
+  }
+  header h1 { font-size: 0.85rem; font-weight: 600; margin: 0; font: 12px ui-monospace, "SF Mono", Menlo, monospace; letter-spacing: 0.02em; }
+  a.back-link { color: #6b8199; text-decoration: none; font-size: 0.78rem; }
+  a.back-link:hover { color: #cde; }
+
+  main { max-width: 700px; margin: 0 auto; padding: 1rem 1rem 3rem; }
+
+  .group { margin-bottom: 0.25rem; }
+  .group-head {
+    display: flex; align-items: center; gap: 0.5rem;
+    padding: 0.5rem 0.15rem; cursor: default;
+  }
+  .group-head .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #4a5a6a); }
+  .group-head h2 {
+    font: 11px ui-monospace, "SF Mono", Menlo, monospace; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #8095ab; margin: 0; flex: 1;
+  }
+  .group-body { border-top: 1px solid #161f28; border-bottom: 1px solid #161f28; margin-bottom: 1rem; padding: 0.4rem 0 0.7rem; }
+
+  #capture-group { --accent: #6bcf7f; }
+  #conn-group { --accent: #7fe0d3; }
+  #col-group { --accent: #c792ea; }
+  #tags-group { --accent: #3987e5; }
+  #appearance-group { --accent: #f0a955; }
+  #danger-group { --accent: #ff6b6b; }
+
+  /* ---- collapsible groups (currently just Appearance, see #appearance-group
+     below) -- other groups stay always-expanded, so only a group-head with
+     .collapsible gets the pointer cursor/chevron/click-to-toggle. ---- */
+  .group-head.collapsible { cursor: pointer; }
+  .group-head .chevron {
+    font-size: 0.65rem; color: #5c7086; transition: transform 0.15s ease;
+  }
+  .group.collapsed .group-body { display: none; }
+  .group.collapsed .chevron { transform: rotate(-90deg); }
+
+  /* ---- Appearance (theme color pickers, see THEME_COLOR_META) ---- */
+  .theme-hex {
+    font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: #9fb3c8;
+    min-width: 4.6rem; text-align: right;
+  }
+  input[type="color"].theme-color-input {
+    -webkit-appearance: none; appearance: none; width: 28px; height: 20px;
+    border: 1px solid #232f3a; border-radius: 4px; padding: 0; background: none; cursor: pointer;
+  }
+  input[type="color"].theme-color-input::-webkit-color-swatch-wrapper { padding: 0; }
+  input[type="color"].theme-color-input::-webkit-color-swatch { border: none; border-radius: 3px; }
+
+  .interface-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 1rem; padding: 0.4rem 0.15rem; border-bottom: 1px dashed #12191f;
+  }
+  .interface-row:last-child { border-bottom: none; }
+  .interface-row label { font-size: 0.82rem; color: #b9c6d4; }
+
+  button {
+    background: #12181f; color: #b9c6d4; border: 1px solid #232f3a;
+    border-radius: 4px; padding: 0.22rem 0.6rem; cursor: pointer; font-size: 0.74rem;
+  }
+  button:hover { background: #1a2530; }
+  button.danger { color: #ff9f9f; border-color: #3a2020; }
+  button.danger:hover { background: #241414; border-color: #ff6b6b; color: #ff8f8f; }
+  button:disabled, button:disabled:hover {
+    opacity: 0.6; cursor: default; background: #12181f; border-color: #232f3a; color: #b9c6d4;
+  }
+  .restart-icon-btn { font-size: 0.85rem; padding: 0.2rem 0.4rem; line-height: 1; }
+
+  select, input[type="text"], input[type="number"] {
+    background: #0e1318; color: #cfd8e0; border: 1px solid #232f3a;
+    border-radius: 4px; padding: 0.24rem 0.45rem; font-size: 0.76rem;
+  }
+  input[type="number"] { width: 4.4rem; }
+  input::placeholder { color: #4a5c70; }
+
+  /* toggle switch -- auto-start / periodic restart / auto-connect checkboxes */
+  .switch { position: relative; display: inline-block; width: 30px; height: 17px; flex: none; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .slider { position: absolute; inset: 0; background: #232f3a; border-radius: 999px; cursor: pointer; transition: 0.15s; }
+  .switch .slider::before {
+    content: ""; position: absolute; width: 12px; height: 12px; left: 2.5px; top: 2.5px;
+    background: #9fb3c8; border-radius: 50%; transition: 0.15s;
+  }
+  .switch input:checked + .slider { background: var(--accent, #3987e5); }
+  .switch input:checked + .slider::before { transform: translateX(13px); background: #fff; }
+
+  .status-line { font-size: 0.74rem; color: #5c7086; padding: 0.3rem 0.15rem 0.7rem; }
+  .status-line.top-status {
+    font: 11px ui-monospace, "SF Mono", Menlo, monospace; padding: 0.5rem 0.6rem;
+    border: 1px solid #1a232c; border-radius: 6px; background: #10161c; margin: 1rem 0 1.25rem;
+  }
+  .status-text { font-size: 0.74rem; color: #5c7086; margin: 0.4rem 0.15rem 0.6rem; line-height: 1.4; }
+  .status-text.error { color: #ff6b6b; }
+
+  .create-row { display: flex; gap: 0.4rem; padding: 0.4rem 0.15rem 0.6rem; }
+  .create-row input { font-size: 0.78rem; }
+  #new-tag-input { flex: 1; }
+  #new-tag-addresses { flex: 1.3; font: 11px ui-monospace, "SF Mono", Menlo, monospace; }
+
+  ul.tag-list { list-style: none; margin: 0; padding: 0; }
+  ul.tag-list > li { padding: 0.4rem 0.15rem; border-bottom: 1px dashed #12191f; }
+  ul.tag-list > li:last-child { border-bottom: none; }
+  ul.tag-list > li.muted { color: #5c7086; font-size: 0.8rem; }
+  .tag-row-main { display: flex; align-items: center; gap: 0.6rem; }
+  .tag-name { flex: 1; font-size: 0.82rem; min-width: 0; }
+  .tag-name input {
+    width: 100%; box-sizing: border-box; background: #0e1318; color: #cfd8e0;
+    border: 1px solid #3987e5; border-radius: 4px; padding: 0.24rem 0.45rem; font-size: 0.78rem;
+  }
+  .tag-count { color: #5c7086; font-size: 0.72rem; white-space: nowrap; font: 11px ui-monospace, "SF Mono", Menlo, monospace; }
+  .error-text { color: #ff6b6b; font-size: 0.74rem; margin-top: 0.4rem; min-height: 1em; padding: 0 0.15rem; }
+
+  /* ---- per-tag device management, shown while editing ---- */
+  .tag-devices { margin: 0.5rem 0 0.1rem; padding-left: 0.1rem; }
+  .device-pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.45rem; min-height: 1.5rem; }
+  .device-pills .muted { font-size: 0.76rem; color: #5c7086; }
+  .tag-pill {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    background: #12181f; border: 1px solid #232f3a; color: #9fb3c8;
+    border-radius: 999px; padding: 0.12rem 0.45rem 0.12rem 0.6rem;
+    font: 11px ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .tag-pill button {
+    background: none; border: none; color: #5c7086; cursor: pointer;
+    font-size: 0.82rem; line-height: 1; padding: 0 0.1rem; font-family: inherit;
+  }
+  .tag-pill button:hover { color: #ff6b6b; }
+  .device-add-row { display: flex; gap: 0.35rem; }
+  .device-add-row input { flex: 1; font: 11px ui-monospace, "SF Mono", Menlo, monospace; }
+  .device-add-row input::placeholder { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+
+  /* ---- column selector (visibility + order), see column_config ---- */
+  /* Three even grid columns (not flex + space-between) -- row-main's width
+     otherwise varies with each column's label length ("Tags" vs "MAC
+     Address"), which pushes column-width/column-reorder to a different x
+     per row instead of a shared, table-like alignment. */
+  ul.column-list { list-style: none; margin: 0; padding: 0; }
+  ul.column-list > li {
+    display: grid; grid-template-columns: 1fr 1fr 1fr; align-items: center;
+    gap: 0.6rem; padding: 0.4rem 0.15rem; border-bottom: 1px dashed #12191f;
+  }
+  ul.column-list > li:last-child { border-bottom: none; }
+  .column-row-main { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; cursor: pointer; }
+  .column-width {
+    display: flex; align-items: center; justify-content: flex-end; gap: 0.35rem;
+    font-size: 0.72rem; color: #5c7086;
+  }
+  .column-width input[type="number"] { width: 3.8rem; }
+  .column-reorder { display: flex; justify-content: flex-end; gap: 0.25rem; }
+  .reorder-btn { padding: 0.15rem 0.45rem; font-size: 0.8rem; line-height: 1.4; }
+</style>
+</head>
+<body>
+<header>
+  <a class="back-link" href="/">&larr; Back</a>
+  <h1>Settings</h1>
+</header>
+<main>
+
+  <div class="status-line top-status" id="monitor-status-line">Checking bluez_monitor.py status…</div>
+
+  <div class="group" id="capture-group">
+    <div class="group-head"><span class="dot"></span><h2>Bluetooth Scanning</h2></div>
+    <div class="group-body">
+      <div class="interface-row">
+        <label for="interface-select">Adapter</label>
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          <select id="interface-select">
+            <option value="hci0">hci0</option>
+            <option value="hci1">hci1</option>
+          </select>
+          <button type="button" class="restart-icon-btn" id="restart-monitor-btn" title="Restart bluez_monitor.py using the saved adapter">&#8635;</button>
+        </div>
+      </div>
+      <div class="interface-row">
+        <label for="scan-mode-select">Scan mode</label>
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          <select id="scan-mode-select">
+            <option value="bredr">bredr</option>
+            <option value="le">le</option>
+            <option value="auto" selected>auto</option>
+          </select>
+          <button type="button" class="restart-icon-btn" id="restart-scan-mode-btn" title="Restart bluez_monitor.py using the saved scan mode">&#8635;</button>
+        </div>
+      </div>
+      <div class="interface-row">
+        <label for="auto-start-toggle">Auto-start on launch</label>
+        <label class="switch"><input type="checkbox" id="auto-start-toggle"><span class="slider"></span></label>
+      </div>
+      <div class="interface-row">
+        <label for="periodic-restart-toggle">Periodically restart bluetooth stack</label>
+        <label class="switch"><input type="checkbox" id="periodic-restart-toggle"><span class="slider"></span></label>
+      </div>
+      <div class="interface-row">
+        <label for="periodic-restart-interval-input">Bluetoothd restart interval (minutes)</label>
+        <input type="number" id="periodic-restart-interval-input" min="5" max="1440">
+      </div>
+      <p class="status-text" id="interface-status"></p>
+    </div>
+  </div>
+
+  <div class="group" id="conn-group">
+    <div class="group-head"><span class="dot"></span><h2>Bluetooth Connections</h2></div>
+    <div class="group-body">
+      <div class="interface-row">
+        <label for="connect-timeout-input">Connection timeout (seconds)</label>
+        <input type="number" id="connect-timeout-input" min="5" max="300">
+      </div>
+      <p class="status-text" id="connect-timeout-status"></p>
+      <div class="interface-row">
+        <label for="auto-connect-latest-toggle">Auto-connect to latest observed device</label>
+        <label class="switch"><input type="checkbox" id="auto-connect-latest-toggle"><span class="slider"></span></label>
+      </div>
+      <div class="interface-row">
+        <label for="auto-connect-latest-interval-input">Auto-connect check interval (seconds)</label>
+        <input type="number" id="auto-connect-latest-interval-input" min="1" max="300">
+      </div>
+      <p class="status-text">Total devices auto-connected to successfully: <span id="auto-connect-success-count">—</span></p>
+      <button type="button" class="danger" id="clear-connections-btn">Clear connection cache</button>
+      <p class="status-text" id="clear-connections-status"></p>
+    </div>
+  </div>
+
+  <div class="group" id="col-group">
+    <div class="group-head"><span class="dot"></span><h2>Columns</h2></div>
+    <div class="group-body">
+      <p class="status-text">Choose which columns appear, their order, and their default width.</p>
+      <ul class="column-list" id="column-list"></ul>
+      <p class="status-text" id="column-status"></p>
+    </div>
+  </div>
+
+  <div class="group" id="tags-group">
+    <div class="group-head"><span class="dot"></span><h2>Tags</h2></div>
+    <div class="group-body">
+      <div class="create-row">
+        <input type="text" id="new-tag-input" placeholder="New tag name…" maxlength="40">
+        <input type="text" id="new-tag-addresses" placeholder="Address(es), comma-separated (optional)">
+        <button type="button" id="create-tag-btn">Add</button>
+      </div>
+      <ul class="tag-list" id="tag-list"></ul>
+      <div class="error-text" id="tag-error"></div>
+    </div>
+  </div>
+
+  <div class="group collapsed" id="appearance-group">
+    <div class="group-head collapsible" id="appearance-head">
+      <span class="dot"></span><h2>Appearance</h2><span class="chevron">&#9662;</span>
+    </div>
+    <div class="group-body">
+      <p class="status-text">Customize the colors used across the app's theme.</p>
+      <div id="theme-color-list"></div>
+      <div class="interface-row">
+        <label>Reset all colors to defaults</label>
+        <button type="button" id="reset-theme-btn">Reset</button>
+      </div>
+      <p class="status-text" id="theme-status"></p>
+    </div>
+  </div>
+
+  <div class="group" id="danger-group">
+    <div class="group-head"><span class="dot"></span><h2>Danger zone</h2></div>
+    <div class="group-body">
+      <button type="button" class="danger" id="start-monitor-btn">Start monitor</button>
+      <button type="button" class="danger" id="stop-monitor-btn">Stop monitor</button>
+      <button type="button" class="danger" id="clear-db-btn">Clear DB</button>
+      <p class="status-text" id="clear-db-status"></p>
+    </div>
+  </div>
+</main>
+<script>
+// Populated by loadTags(); looked up by name when editing a row so address
+// add/remove can update just that row's pills without a full reload (a full
+// reload would collapse the row back out of edit mode).
+let currentTags = [];
+
+function escapeXml(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function setError(message) {
+  document.getElementById('tag-error').textContent = message || '';
+}
+
+function renderDevicePills(addresses) {
+  return addresses.length
+    ? addresses.map(addr =>
+        `<span class="tag-pill">${escapeXml(addr)}` +
+        `<button type="button" class="remove-device-btn" data-address="${escapeXml(addr)}" aria-label="Remove device">&times;</button></span>`
+      ).join('')
+    : '<span class="muted">No devices yet</span>';
+}
+
+function deviceCountLabel(addresses) {
+  return `${addresses.length} device${addresses.length === 1 ? '' : 's'}`;
+}
+
+function renderTagRow(t) {
+  return `<li data-tag="${escapeXml(t.tag)}">` +
+    `<div class="tag-row-main">` +
+    `<span class="tag-name" data-display>${escapeXml(t.tag)}</span>` +
+    `<span class="tag-count">${deviceCountLabel(t.addresses)}</span>` +
+    `<button type="button" class="edit-btn">Edit</button>` +
+    `<button type="button" class="danger delete-btn">Delete</button>` +
+    `</div>` +
+    `<div class="tag-devices" style="display:none">` +
+    `<div class="device-pills">${renderDevicePills(t.addresses)}</div>` +
+    `<div class="device-add-row">` +
+    `<input type="text" class="device-add-input" placeholder="Add address (e.g. AA:BB:CC:DD:EE:FF)…">` +
+    `<button type="button" class="add-device-btn">Add</button>` +
+    `</div></div>` +
+    `</li>`;
+}
+
+async function loadTags() {
+  const res = await fetch('/api/tags');
+  currentTags = await res.json();
+  const list = document.getElementById('tag-list');
+  list.innerHTML = currentTags.length
+    ? currentTags.map(renderTagRow).join('')
+    : '<li class="muted">No tags yet, add one above.</li>';
+}
+
+// Devices named in the optional address field are attached via the same
+// per-device tag endpoint the main Gantt view's device modal uses (POST
+// /api/device/<address>/tags). That endpoint doesn't require the address to
+// belong to a previously-seen device, so a tag can be pre-attached to a MAC
+// that hasn't been captured yet.
+async function createTag() {
+  const nameInput = document.getElementById('new-tag-input');
+  const addressesInput = document.getElementById('new-tag-addresses');
+  const name = nameInput.value.trim();
+  if (!name) return;
+  setError('');
+  const res = await fetch('/api/tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  const data = await res.json();
+  if (!res.ok) { setError(data.error || 'Failed to create tag.'); return; }
+
+  const addresses = addressesInput.value.split(',').map(a => a.trim()).filter(Boolean);
+  const failed = [];
+  for (const address of addresses) {
+    if (!(await addDeviceToTag(name, address, /*quiet=*/true))) failed.push(address);
+  }
+  if (failed.length) setError(`Tag created, but failed to attach: ${failed.join(', ')}`);
+
+  nameInput.value = '';
+  addressesInput.value = '';
+  loadTags();
+}
+
+async function deleteTag(name) {
+  if (!confirm(`Delete tag "${name}"? This removes it from every device.`)) return;
+  await fetch('/api/tags/' + encodeURIComponent(name), { method: 'DELETE' });
+  loadTags();
+}
+
+async function renameTag(oldName, newName) {
+  setError('');
+  const res = await fetch('/api/tags/' + encodeURIComponent(oldName), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: newName }),
+  });
+  const data = await res.json();
+  if (!res.ok) { setError(data.error || 'Failed to rename tag.'); return false; }
+  return true;
+}
+
+// Same endpoint the device modal's tag input uses, just driven from the
+// tag's side instead of the device's. quiet=true (used from createTag,
+// which reports its own aggregate failure list) suppresses the per-call
+// error message.
+async function addDeviceToTag(tagName, address, quiet) {
+  const res = await fetch(`/api/device/${encodeURIComponent(address)}/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tag: tagName }),
+  });
+  if (!res.ok && !quiet) {
+    const data = await res.json().catch(() => ({}));
+    setError(data.error || `Failed to attach "${address}".`);
+  }
+  return res.ok;
+}
+
+async function removeDeviceFromTag(tagName, address) {
+  await fetch(
+    `/api/device/${encodeURIComponent(address)}/tags/${encodeURIComponent(tagName)}`,
+    { method: 'DELETE' },
+  );
+}
+
+// Turns the row's name into an editable input, flips Edit -> Save, and
+// reveals the device pills/add-row underneath. Pressing Enter in the name
+// input just clicks the (now-)Save button, so there's one single code path
+// (the delegated click handler below) that actually submits the rename.
+function startEditingTag(li, currentName) {
+  const nameSpan = li.querySelector('[data-display]');
+  nameSpan.innerHTML = `<input type="text" value="${escapeXml(currentName)}" maxlength="40">`;
+  const input = nameSpan.querySelector('input');
+  input.focus();
+  input.select();
+  const editBtn = li.querySelector('.edit-btn');
+  editBtn.textContent = 'Save';
+  editBtn.classList.add('save-btn');
+  editBtn.classList.remove('edit-btn');
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); editBtn.click(); }
+    if (ev.key === 'Escape') { ev.preventDefault(); loadTags(); }
+  });
+  li.querySelector('.tag-devices').style.display = 'block';
+}
+
+document.getElementById('create-tag-btn').addEventListener('click', createTag);
+document.getElementById('new-tag-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); createTag(); }
+});
+document.getElementById('new-tag-addresses').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); createTag(); }
+});
+
+document.getElementById('tag-list').addEventListener('click', async (e) => {
+  const li = e.target.closest('li[data-tag]');
+  if (!li) return;
+  const tag = li.dataset.tag;
+
+  if (e.target.classList.contains('delete-btn')) {
+    deleteTag(tag);
+    return;
+  }
+  if (e.target.classList.contains('edit-btn')) {
+    startEditingTag(li, tag);
+    return;
+  }
+  if (e.target.classList.contains('save-btn')) {
+    const input = li.querySelector('.tag-name input');
+    const newName = input.value.trim();
+    if (newName && newName !== tag) await renameTag(tag, newName);
+    loadTags();
+    return;
+  }
+  if (e.target.classList.contains('remove-device-btn')) {
+    const address = e.target.dataset.address;
+    await removeDeviceFromTag(tag, address);
+    const entry = currentTags.find(t => t.tag === tag);
+    if (entry) {
+      entry.addresses = entry.addresses.filter(a => a !== address);
+      li.querySelector('.device-pills').innerHTML = renderDevicePills(entry.addresses);
+      li.querySelector('.tag-count').textContent = deviceCountLabel(entry.addresses);
+    }
+    return;
+  }
+  if (e.target.classList.contains('add-device-btn')) {
+    const input = li.querySelector('.device-add-input');
+    const address = input.value.trim();
+    if (!address) return;
+    setError('');
+    if (!(await addDeviceToTag(tag, address))) return;
+    input.value = '';
+    const entry = currentTags.find(t => t.tag === tag);
+    if (entry && !entry.addresses.includes(address)) {
+      entry.addresses.push(address);
+      li.querySelector('.device-pills').innerHTML = renderDevicePills(entry.addresses);
+      li.querySelector('.tag-count').textContent = deviceCountLabel(entry.addresses);
+    }
+  }
+});
+document.getElementById('tag-list').addEventListener('keydown', (e) => {
+  if (e.target.classList.contains('device-add-input') && e.key === 'Enter') {
+    e.preventDefault();
+    e.target.closest('li').querySelector('.add-device-btn').click();
+  }
+});
+
+loadTags();
+
+// Status line for context around the adapter picker and restart button
+// below, and the Clear DB button further down -- app.py itself auto-starts
+// bluez_monitor.py on its own startup if it's not already running (see
+// __main__ in app.py), and otherwise it's only ever started/stopped from
+// here or the CLI.
+// Last known running state, from the most recent /api/monitor/status fetch
+// below -- null until that first resolves. Start/Stop's disabled state (see
+// applyMonitorControlsState) depends on this as well as the busy flag, so
+// both can't go stale relative to each other: whichever finishes last wins,
+// which is fine since either one alone converges to the right state shortly
+// after (refreshMonitorStatusLine is always called again once busy clears --
+// see the finally blocks below).
+let monitorRunning = null;
+
+async function refreshMonitorStatusLine() {
+  const el = document.getElementById('monitor-status-line');
+  try {
+    const res = await fetch('/api/monitor/status');
+    const data = await res.json();
+    monitorRunning = data.running;
+    el.textContent = data.running
+      ? `bluez_monitor.py is currently running (pid ${data.pid}).`
+      : 'bluez_monitor.py is currently stopped.';
+  } catch (err) {
+    el.textContent = 'Could not check bluez_monitor.py status.';
+  }
+  applyMonitorControlsState();
+}
+
+function setInterfaceStatus(message, isError) {
+  const el = document.getElementById('interface-status');
+  el.textContent = message || '';
+  el.classList.toggle('error', Boolean(isError));
+}
+
+async function loadInterface() {
+  try {
+    const res = await fetch('/api/interface');
+    const data = await res.json();
+    document.getElementById('interface-select').value = data.interface;
+  } catch (err) {
+    setInterfaceStatus('Could not load the saved adapter.', true);
+  }
+}
+
+// Saves immediately on change -- does NOT restart bluez_monitor.py by
+// itself; the change only takes effect the next time it's (re)started (see
+// restartMonitor below, or app.py's own auto-start next time it's launched).
+async function saveInterface(interface_) {
+  setInterfaceStatus('');
+  try {
+    const res = await fetch('/api/interface', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interface: interface_ }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setInterfaceStatus(data.error || 'Failed to save the adapter.', true);
+      return;
+    }
+    setInterfaceStatus(`Saved — restart bluez_monitor.py to switch to ${interface_}.`);
+  } catch (err) {
+    setInterfaceStatus('Failed to save the adapter.', true);
+  }
+}
+
+async function loadScanMode() {
+  try {
+    const res = await fetch('/api/scan-mode');
+    const data = await res.json();
+    document.getElementById('scan-mode-select').value = data.scan_mode;
+  } catch (err) {
+    setInterfaceStatus('Could not load the saved scan mode.', true);
+  }
+}
+
+// Saves immediately on change -- does NOT restart bluez_monitor.py by
+// itself; the change only takes effect the next time it's (re)started (see
+// restartMonitor below, or app.py's own auto-start next time it's launched).
+async function saveScanMode(scanMode) {
+  setInterfaceStatus('');
+  try {
+    const res = await fetch('/api/scan-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scan_mode: scanMode }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setInterfaceStatus(data.error || 'Failed to save the scan mode.', true);
+      return;
+    }
+    setInterfaceStatus(`Saved — restart bluez_monitor.py to switch to ${scanMode} mode.`);
+  } catch (err) {
+    setInterfaceStatus('Failed to save the scan mode.', true);
+  }
+}
+
+async function loadAutoStart() {
+  try {
+    const res = await fetch('/api/auto-start');
+    const data = await res.json();
+    document.getElementById('auto-start-toggle').checked = data.enabled;
+  } catch (err) {
+    setInterfaceStatus('Could not load the auto-start setting.', true);
+  }
+}
+
+// Saves immediately on toggle. Unlike interface/scan-mode, this doesn't
+// need a restart to "take effect" -- it's only ever consulted by app.py's
+// own __main__ at its own next launch (see _get_auto_start there), not by
+// an already-running bluez_monitor.py or by restart_monitor/clear_db, so
+// there's no matching restart-icon button for it here.
+async function saveAutoStart(enabled) {
+  setInterfaceStatus('');
+  try {
+    const res = await fetch('/api/auto-start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setInterfaceStatus(data.error || 'Failed to save the auto-start setting.', true);
+      return;
+    }
+    setInterfaceStatus(
+      enabled
+        ? 'Saved — bluez_monitor.py will auto-start the next time app.py launches.'
+        : 'Saved — bluez_monitor.py will NOT auto-start the next time app.py launches.'
+    );
+  } catch (err) {
+    setInterfaceStatus('Failed to save the auto-start setting.', true);
+  }
+}
+
+async function loadPeriodicRestart() {
+  try {
+    const res = await fetch('/api/periodic-restart');
+    const data = await res.json();
+    document.getElementById('periodic-restart-toggle').checked = data.enabled;
+  } catch (err) {
+    setInterfaceStatus('Could not load the periodic restart setting.', true);
+  }
+}
+
+// Saves immediately on toggle -- no monitor restart needed, same reasoning
+// as saveAutoConnectLatest below: bluez_monitor.py's periodic_bluetooth_
+// restart_tick re-reads this fresh every time it self-reschedules.
+async function savePeriodicRestart(enabled) {
+  setInterfaceStatus('');
+  try {
+    const res = await fetch('/api/periodic-restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setInterfaceStatus(data.error || 'Failed to save the periodic restart setting.', true);
+      return;
+    }
+    setInterfaceStatus(
+      enabled
+        ? 'Saved — periodic bluetooth stack restarts are on.'
+        : 'Saved — periodic bluetooth stack restarts are off.'
+    );
+  } catch (err) {
+    setInterfaceStatus('Failed to save the periodic restart setting.', true);
+  }
+}
+
+async function loadPeriodicRestartInterval() {
+  try {
+    const res = await fetch('/api/periodic-restart-interval');
+    const data = await res.json();
+    document.getElementById('periodic-restart-interval-input').value = data.interval_minutes;
+  } catch (err) {
+    setInterfaceStatus('Could not load the periodic restart interval.', true);
+  }
+}
+
+// Saves immediately on change -- no monitor restart needed, same reasoning
+// as savePeriodicRestart above: bluez_monitor.py's periodic_bluetooth_
+// restart_tick re-reads this fresh every time it self-reschedules.
+async function savePeriodicRestartInterval(intervalMinutes) {
+  setInterfaceStatus('');
+  try {
+    const res = await fetch('/api/periodic-restart-interval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interval_minutes: intervalMinutes }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setInterfaceStatus(data.error || 'Failed to save the periodic restart interval.', true);
+      return;
+    }
+    document.getElementById('periodic-restart-interval-input').value = data.interval_minutes;
+    setInterfaceStatus('Saved — takes effect on the next scheduled restart check.');
+  } catch (err) {
+    setInterfaceStatus('Failed to save the periodic restart interval.', true);
+  }
+}
+
+// ---- Appearance (theme colors, see theme_config/DEFAULT_THEME_COLORS in app.py) ----
+const THEME_COLOR_META = [
+  { key: 'bg', label: 'Page background' },
+  { key: 'surface', label: 'Panels, inputs & buttons' },
+  { key: 'border', label: 'Borders' },
+  { key: 'text', label: 'Primary text' },
+  { key: 'muted', label: 'Secondary text' },
+  { key: 'accent', label: 'Accent (ticks & highlights)' },
+];
+// Mirrors DEFAULT_THEME_COLORS in app.py -- only used by resetThemeColors
+// below; the initial render always comes from GET /api/theme-colors instead,
+// same as every other setting on this page.
+const DEFAULT_THEME_COLORS = {
+  bg: '#0b0f14', surface: '#16202b', border: '#2a3a4a', text: '#d8e1e8',
+  muted: '#7d93a8', accent: '#4fd1c5', success: '#6bcf7f', danger: '#ff6b6b',
+};
+
+// Mirrors the server's theme_config rows -- mutated locally on each color
+// pick, then the whole map is re-sent on save (see saveThemeColors), same
+// one-shot-rewrite approach as currentColumns/saveColumns above.
+let currentThemeColors = {};
+
+function setThemeStatus(message, isError) {
+  const el = document.getElementById('theme-status');
+  el.textContent = message || '';
+  el.classList.toggle('error', Boolean(isError));
+}
+
+function renderThemeColorList() {
+  const list = document.getElementById('theme-color-list');
+  list.innerHTML = THEME_COLOR_META.map(({ key, label }) => {
+    const value = currentThemeColors[key] || '#000000';
+    return `
+      <div class="interface-row">
+        <label for="theme-${key}-input">${label}</label>
+        <div style="display:flex;align-items:center;gap:0.5rem">
+          <span class="theme-hex" id="theme-${key}-hex">${value}</span>
+          <input type="color" id="theme-${key}-input" class="theme-color-input" data-key="${key}" value="${value}">
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function loadThemeColors() {
+  try {
+    const res = await fetch('/api/theme-colors');
+    const data = await res.json();
+    currentThemeColors = data.colors;
+    renderThemeColorList();
+  } catch (err) {
+    setThemeStatus('Could not load theme colors.', true);
+  }
+}
+
+async function saveThemeColors() {
+  setThemeStatus('');
+  try {
+    const res = await fetch('/api/theme-colors', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ colors: currentThemeColors }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setThemeStatus(data.error || 'Failed to save theme colors.', true);
+      return;
+    }
+    setThemeStatus('Saved — reload the app to see the change.');
+  } catch (err) {
+    setThemeStatus('Failed to save theme colors.', true);
+  }
+}
+
+// 'input' fires continuously while a color picker is open (e.g. dragging in
+// the native swatch UI) -- used just to keep the hex readout live. 'change'
+// fires once the picker closes/commits, which is when the value is actually
+// worth persisting -- same split as the width/interval number inputs
+// elsewhere on this page, which clamp+save on 'change' rather than 'input'.
+document.getElementById('theme-color-list').addEventListener('input', (e) => {
+  if (!e.target.classList.contains('theme-color-input')) return;
+  const key = e.target.dataset.key;
+  currentThemeColors[key] = e.target.value;
+  const hexEl = document.getElementById(`theme-${key}-hex`);
+  if (hexEl) hexEl.textContent = e.target.value;
+});
+document.getElementById('theme-color-list').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('theme-color-input')) return;
+  saveThemeColors();
+});
+
+document.getElementById('reset-theme-btn').addEventListener('click', () => {
+  currentThemeColors = { ...DEFAULT_THEME_COLORS };
+  renderThemeColorList();
+  saveThemeColors();
+});
+
+// Appearance is the only collapsible group on this page (starts collapsed,
+// see #appearance-group's class in the markup above) -- toggled purely by
+// adding/removing .collapsed, no persisted open/closed state.
+document.getElementById('appearance-head').addEventListener('click', () => {
+  document.getElementById('appearance-group').classList.toggle('collapsed');
+});
+
+// ---- Bluetooth Connections (device modal's Connect timeout) ----
+function setConnectTimeoutStatus(message, isError) {
+  const el = document.getElementById('connect-timeout-status');
+  el.textContent = message || '';
+  el.classList.toggle('error', Boolean(isError));
+}
+
+async function loadConnectTimeout() {
+  try {
+    const res = await fetch('/api/connect-timeout');
+    const data = await res.json();
+    document.getElementById('connect-timeout-input').value = data.timeout_seconds;
+  } catch (err) {
+    setConnectTimeoutStatus('Could not load the connect timeout.', true);
+  }
+}
+
+// Saves immediately on change -- no restart needed, unlike interface/scan-
+// mode: bluez_monitor.py re-reads this fresh on every connect attempt (see
+// _get_connect_timeout_seconds there), so this takes effect on the very
+// next Connect click.
+async function saveConnectTimeout(timeoutSeconds) {
+  setConnectTimeoutStatus('');
+  try {
+    const res = await fetch('/api/connect-timeout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timeout_seconds: timeoutSeconds }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setConnectTimeoutStatus(data.error || 'Failed to save the connect timeout.', true);
+      return;
+    }
+    document.getElementById('connect-timeout-input').value = data.timeout_seconds;
+    setConnectTimeoutStatus('Saved — takes effect on the next Connect click.');
+  } catch (err) {
+    setConnectTimeoutStatus('Failed to save the connect timeout.', true);
+  }
+}
+
+async function loadAutoConnectLatest() {
+  try {
+    const res = await fetch('/api/auto-connect-latest');
+    const data = await res.json();
+    document.getElementById('auto-connect-latest-toggle').checked = data.enabled;
+  } catch (err) {
+    setConnectTimeoutStatus('Could not load the auto-connect setting.', true);
+  }
+}
+
+// Saves immediately on toggle -- no restart needed, same reasoning as
+// saveConnectTimeout above: bluez_monitor.py's auto_connect_latest_tick
+// re-reads this fresh on every tick (see AUTO_CONNECT_LATEST_POLL_INTERVAL_
+// SECONDS there).
+async function saveAutoConnectLatest(enabled) {
+  setConnectTimeoutStatus('');
+  try {
+    const res = await fetch('/api/auto-connect-latest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setConnectTimeoutStatus(data.error || 'Failed to save the auto-connect setting.', true);
+      return;
+    }
+    setConnectTimeoutStatus(enabled ? 'Saved — auto-connect is on.' : 'Saved — auto-connect is off.');
+  } catch (err) {
+    setConnectTimeoutStatus('Failed to save the auto-connect setting.', true);
+  }
+}
+
+async function loadAutoConnectLatestInterval() {
+  try {
+    const res = await fetch('/api/auto-connect-latest-interval');
+    const data = await res.json();
+    document.getElementById('auto-connect-latest-interval-input').value = data.interval_seconds;
+  } catch (err) {
+    setConnectTimeoutStatus('Could not load the auto-connect interval.', true);
+  }
+}
+
+// Saves immediately on change -- no restart needed, same reasoning as
+// saveConnectTimeout: bluez_monitor.py's auto_connect_latest_tick re-reads
+// this fresh every time it self-reschedules.
+async function saveAutoConnectLatestInterval(intervalSeconds) {
+  setConnectTimeoutStatus('');
+  try {
+    const res = await fetch('/api/auto-connect-latest-interval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ interval_seconds: intervalSeconds }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setConnectTimeoutStatus(data.error || 'Failed to save the auto-connect interval.', true);
+      return;
+    }
+    document.getElementById('auto-connect-latest-interval-input').value = data.interval_seconds;
+    setConnectTimeoutStatus('Saved — takes effect on the next auto-connect check.');
+  } catch (err) {
+    setConnectTimeoutStatus('Failed to save the auto-connect interval.', true);
+  }
+}
+
+// Distinct-device count, not a running tally of every connect event -- see
+// auto_connect_successes/get_auto_connect_success_count in app.py. Read-only
+// (no corresponding save function): this is a record of what's already
+// happened, not a setting.
+async function loadAutoConnectSuccessCount() {
+  try {
+    const res = await fetch('/api/auto-connect-successes/count');
+    const data = await res.json();
+    document.getElementById('auto-connect-success-count').textContent = data.count;
+  } catch (err) {
+    document.getElementById('auto-connect-success-count').textContent = '—';
+  }
+}
+
+// Clears device_connections (the Connect/Disconnect state the device modal
+// polls, see _get_device_connect_status in app.py) -- unlike Clear DB, this
+// doesn't touch bluetooth.db or restart bluez_monitor.py, so there's
+// nothing to gray out/wait on here.
+function setClearConnectionsStatus(message, isError) {
+  const el = document.getElementById('clear-connections-status');
+  el.textContent = message || '';
+  el.classList.toggle('error', Boolean(isError));
+}
+
+async function clearConnections() {
+  setClearConnectionsStatus('');
+  try {
+    const res = await fetch('/api/device-connections/clear', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setClearConnectionsStatus(data.error || 'Failed to clear the connection cache.', true);
+      return;
+    }
+    setClearConnectionsStatus('Cleared.');
+  } catch (err) {
+    setClearConnectionsStatus('Failed to clear the connection cache.', true);
+  }
+}
+
+// ---- Columns (main chart's optional-column visibility + order) ----
+// Keys must match app.py's ALLOWED_COLUMNS/COLUMN_DEFS on the main page.
+const COLUMN_LABELS = {
+  count: 'Count',
+  rssi: 'RSSI',
+  uuid: 'UUIDs',
+  first_seen: 'First seen',
+  last_seen: 'Last seen',
+  mac: 'MAC Address',
+  tags: 'Tags',
+  service_data: 'Service Data',
+};
+// Mirrors app.py's MIN_COLUMN_WIDTH/MAX_COLUMN_WIDTH -- clamps the "Default
+// width" input client-side purely so it never rejects on save; the server
+// re-validates against those same bounds regardless.
+const MIN_COLUMN_WIDTH = 24;
+const MAX_COLUMN_WIDTH = 400;
+
+// Mirrors the server's column_config rows, in display order -- mutated
+// locally on toggle/reorder/width edit, then the whole list is re-sent on
+// every change (see saveColumns) rather than diffing, same one-shot-rewrite
+// approach as _set_columns in app.py.
+let currentColumns = [];
+
+function setColumnStatus(message, isError) {
+  const el = document.getElementById('column-status');
+  el.textContent = message || '';
+  el.classList.toggle('error', Boolean(isError));
+}
+
+function renderColumnList() {
+  const list = document.getElementById('column-list');
+  list.innerHTML = currentColumns.map((c, i) => `
+    <li data-key="${c.key}">
+      <label class="column-row-main">
+        <input type="checkbox" class="column-visible-toggle" ${c.visible ? 'checked' : ''}>
+        <span>${COLUMN_LABELS[c.key] || c.key}</span>
+      </label>
+      <label class="column-width">
+        Default width
+        <input type="number" class="column-width-input" value="${c.width}"
+               min="${MIN_COLUMN_WIDTH}" max="${MAX_COLUMN_WIDTH}">
+      </label>
+      <span class="column-reorder">
+        <button type="button" class="reorder-btn move-up-btn" title="Move up"${i === 0 ? ' disabled' : ''}>&#8593;</button>
+        <button type="button" class="reorder-btn move-down-btn" title="Move down"${i === currentColumns.length - 1 ? ' disabled' : ''}>&#8595;</button>
+      </span>
+    </li>
+  `).join('');
+}
+
+async function loadColumns() {
+  try {
+    const res = await fetch('/api/columns');
+    const data = await res.json();
+    currentColumns = data.columns;
+    renderColumnList();
+  } catch (err) {
+    setColumnStatus('Could not load column settings.', true);
+  }
+}
+
+async function saveColumns() {
+  setColumnStatus('');
+  try {
+    const res = await fetch('/api/columns', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ columns: currentColumns }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setColumnStatus(data.error || 'Failed to save column settings.', true);
+      return;
+    }
+    setColumnStatus('Saved — reload the graph to see the change.');
+  } catch (err) {
+    setColumnStatus('Failed to save column settings.', true);
+  }
+}
+
+document.getElementById('column-list').addEventListener('click', (e) => {
+  const li = e.target.closest('li[data-key]');
+  if (!li) return;
+  const idx = currentColumns.findIndex(c => c.key === li.dataset.key);
+  if (e.target.classList.contains('move-up-btn') && idx > 0) {
+    [currentColumns[idx - 1], currentColumns[idx]] = [currentColumns[idx], currentColumns[idx - 1]];
+  } else if (e.target.classList.contains('move-down-btn') && idx < currentColumns.length - 1) {
+    [currentColumns[idx + 1], currentColumns[idx]] = [currentColumns[idx], currentColumns[idx + 1]];
+  } else {
+    return;
+  }
+  renderColumnList();
+  saveColumns();
+});
+document.getElementById('column-list').addEventListener('change', (e) => {
+  const li = e.target.closest('li[data-key]');
+  const entry = li && currentColumns.find(c => c.key === li.dataset.key);
+  if (!entry) return;
+  if (e.target.classList.contains('column-visible-toggle')) {
+    entry.visible = e.target.checked;
+  } else if (e.target.classList.contains('column-width-input')) {
+    entry.width = Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, Number(e.target.value) || entry.width));
+    e.target.value = entry.width;
+  } else {
+    return;
+  }
+  saveColumns();
+});
+
+// bluez_monitor.py is launched via subprocess.Popen and takes a moment to
+// actually start up and write its own "running" row (see _set_monitor_status
+// in bluez_monitor.py) -- refreshMonitorStatusLine() right after the fetch
+// resolves can easily land in that gap and show stale state. A full reload
+// a few seconds later re-fetches everything on the page (status line, tags,
+// saved adapter/scan mode) against whatever's actually true by then, not
+// just the one status line.
+const AUTO_REFRESH_DELAY_MS = 3000;
+function scheduleAutoRefresh() {
+  setTimeout(() => location.reload(), AUTO_REFRESH_DELAY_MS);
+}
+
+// All five buttons below drive the same underlying process (see
+// _stop_monitor in app.py), so all are grayed out for the duration of ANY
+// ONE operation -- not just the one clicked -- to rule out overlapping
+// start/stop/restart/clear calls racing each other. The interface and
+// scan-mode pickers are included too, so their saved values can't change
+// out from under an in-flight restart. Start/Stop additionally reflect
+// monitorRunning even when nothing is in flight: Start only makes sense
+// while stopped, Stop only while running -- monitorRunning === null (status
+// not fetched yet) disables both, rather than guessing.
+let monitorBusy = false;
+
+function applyMonitorControlsState() {
+  document.getElementById('start-monitor-btn').disabled = monitorBusy || monitorRunning !== false;
+  document.getElementById('stop-monitor-btn').disabled = monitorBusy || monitorRunning !== true;
+  document.getElementById('clear-db-btn').disabled = monitorBusy;
+  document.getElementById('restart-monitor-btn').disabled = monitorBusy;
+  document.getElementById('restart-scan-mode-btn').disabled = monitorBusy;
+  document.getElementById('interface-select').disabled = monitorBusy;
+  document.getElementById('scan-mode-select').disabled = monitorBusy;
+}
+
+function setMonitorControlsBusy(busy) {
+  monitorBusy = busy;
+  applyMonitorControlsState();
+}
+
+async function restartMonitor() {
+  setMonitorControlsBusy(true);
+  setInterfaceStatus('Restarting bluez_monitor.py — this can take up to ~30s if it has to force-stop…');
+  try {
+    const res = await fetch('/api/monitor/restart', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setInterfaceStatus(data.error || 'Failed to restart bluez_monitor.py.', true);
+    } else {
+      setInterfaceStatus('bluez_monitor.py is restarting.');
+    }
+  } catch (err) {
+    setInterfaceStatus('Failed to restart bluez_monitor.py.', true);
+  } finally {
+    setMonitorControlsBusy(false);
+    refreshMonitorStatusLine();
+    scheduleAutoRefresh();
+  }
+}
+
+// Paired with stopMonitor -- starts bluez_monitor.py against whatever
+// adapter/scan mode is currently saved. Only ever clickable while stopped
+// (see applyMonitorControlsState), so the already-running case in
+// /api/monitor/start is just a defensive no-op, not something this needs to
+// handle specially here.
+async function startMonitor() {
+  const status = document.getElementById('clear-db-status');
+  setMonitorControlsBusy(true);
+  status.classList.remove('error');
+  status.textContent = 'Starting bluez_monitor.py…';
+  try {
+    const res = await fetch('/api/monitor/start', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      status.classList.add('error');
+      status.textContent = data.error || 'Failed to start bluez_monitor.py.';
+    } else {
+      status.textContent = 'bluez_monitor.py is starting.';
+    }
+  } catch (err) {
+    status.classList.add('error');
+    status.textContent = 'Failed to start bluez_monitor.py.';
+  } finally {
+    setMonitorControlsBusy(false);
+    refreshMonitorStatusLine();
+    scheduleAutoRefresh();
+  }
+}
+
+// Leaves bluetooth.db untouched and does NOT restart bluez_monitor.py
+// afterward (unlike restartMonitor/clearDb) -- for taking the monitor down
+// on its own, e.g. before deleting data/DBs/bluetooth.db by hand so nothing
+// is left holding it open (see the app.py docstring on _stop_monitor).
+async function stopMonitor() {
+  const status = document.getElementById('clear-db-status');
+  setMonitorControlsBusy(true);
+  status.classList.remove('error');
+  status.textContent = 'Stopping bluez_monitor.py — this can take up to ~30s if it has to force-stop…';
+  try {
+    const res = await fetch('/api/monitor/stop', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      status.classList.add('error');
+      status.textContent = data.error || 'Failed to stop bluez_monitor.py.';
+    } else {
+      status.textContent = 'bluez_monitor.py is stopped.';
+    }
+  } catch (err) {
+    status.classList.add('error');
+    status.textContent = 'Failed to stop bluez_monitor.py.';
+  } finally {
+    setMonitorControlsBusy(false);
+    refreshMonitorStatusLine();
+    scheduleAutoRefresh();
+  }
+}
+
+// Deliberately destructive -- deletes bluetooth.db outright (all captured
+// device history, gone) after stopping bluez_monitor.py, then restarts it
+// against a fresh copy of baseline.db (see clear_db in app.py). Gated
+// behind confirm() since there's no undo.
+async function clearDb() {
+  if (!confirm(
+    'This stops bluez_monitor.py, permanently deletes ALL captured data ' +
+    'in bluetooth.db, and restarts it fresh. This cannot be undone. Continue?'
+  )) return;
+
+  const status = document.getElementById('clear-db-status');
+  setMonitorControlsBusy(true);
+  status.classList.remove('error');
+  status.textContent = 'Stopping bluez_monitor.py and clearing the database — this can take up to ~30s if it has to force-stop…';
+  try {
+    const res = await fetch('/api/monitor/clear-db', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      status.classList.add('error');
+      status.textContent = data.error || 'Failed to clear the database.';
+    } else {
+      status.textContent = 'Database cleared — bluez_monitor.py is restarting.';
+    }
+  } catch (err) {
+    status.classList.add('error');
+    status.textContent = 'Failed to clear the database.';
+  } finally {
+    setMonitorControlsBusy(false);
+    refreshMonitorStatusLine();
+    scheduleAutoRefresh();
+  }
+}
+
+document.getElementById('start-monitor-btn').addEventListener('click', startMonitor);
+document.getElementById('stop-monitor-btn').addEventListener('click', stopMonitor);
+document.getElementById('clear-db-btn').addEventListener('click', clearDb);
+document.getElementById('interface-select').addEventListener('change', (e) => saveInterface(e.target.value));
+document.getElementById('restart-monitor-btn').addEventListener('click', restartMonitor);
+document.getElementById('scan-mode-select').addEventListener('change', (e) => saveScanMode(e.target.value));
+document.getElementById('restart-scan-mode-btn').addEventListener('click', restartMonitor);
+document.getElementById('auto-start-toggle').addEventListener('change', (e) => saveAutoStart(e.target.checked));
+document.getElementById('periodic-restart-toggle').addEventListener('change', (e) => savePeriodicRestart(e.target.checked));
+document.getElementById('periodic-restart-interval-input').addEventListener('change', (e) => {
+  const value = Math.max(5, Math.min(1440, Math.round(Number(e.target.value)) || 60));
+  e.target.value = value;
+  savePeriodicRestartInterval(value);
+});
+document.getElementById('connect-timeout-input').addEventListener('change', (e) => {
+  const value = Math.max(5, Math.min(300, Math.round(Number(e.target.value)) || 60));
+  e.target.value = value;
+  saveConnectTimeout(value);
+});
+document.getElementById('clear-connections-btn').addEventListener('click', clearConnections);
+document.getElementById('auto-connect-latest-toggle').addEventListener('change', (e) => saveAutoConnectLatest(e.target.checked));
+document.getElementById('auto-connect-latest-interval-input').addEventListener('change', (e) => {
+  const value = Math.max(1, Math.min(300, Math.round(Number(e.target.value)) || 10));
+  e.target.value = value;
+  saveAutoConnectLatestInterval(value);
+});
+refreshMonitorStatusLine();
+loadInterface();
+loadScanMode();
+loadAutoStart();
+loadPeriodicRestart();
+loadPeriodicRestartInterval();
+loadConnectTimeout();
+loadAutoConnectLatest();
+loadAutoConnectLatestInterval();
+loadAutoConnectSuccessCount();
+loadColumns();
+loadThemeColors();
+</script>
+</body>
+</html>
