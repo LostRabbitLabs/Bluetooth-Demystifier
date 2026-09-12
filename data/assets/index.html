@@ -4,8 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bluetooth Demystifier</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --topbar-h: 32px; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     margin: 0;
@@ -29,37 +30,105 @@
     top: 0;
     z-index: 2;
   }
+  /* Toggled open/closed by clicking #meta (the "N devices seen" button, see
+     its click handler near the bottom of this script) -- not a navigation,
+     just a page-wide drawer reserved for whatever stats end up living here.
+     Same glass-rail treatment as header itself so the two read as one
+     continuous bar when open. */
+  #stats-panel {
+    display: none;
+    position: relative;
+    padding: 0.9rem 1rem 1.2rem;
+    min-height: 60px;
+    background: color-mix(in srgb, var(--theme-bg, #0b0f14) 82%, transparent);
+    border-bottom: 1px solid #ffffff14;
+  }
+  #stats-panel.open { display: block; }
+  /* Drags to resize --stats-list-h (read by .stats-list below), which is
+     what actually makes the columns taller/shorter -- the panel itself has
+     no fixed height of its own, it just grows/shrinks to fit. Sits over the
+     panel's own bottom edge rather than taking separate layout space. */
+  #stats-resize-handle {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 10px;
+    cursor: row-resize; touch-action: none;
+  }
+  #stats-resize-handle::after {
+    content: ''; position: absolute; left: 50%; bottom: 3px;
+    width: 36px; height: 3px; border-radius: 2px;
+    background: #ffffff2a; transform: translateX(-50%);
+  }
+  #stats-resize-handle:hover::after,
+  body.stats-resizing #stats-resize-handle::after { background: #4fd1c5aa; }
+  body.stats-resizing { cursor: row-resize; user-select: none; }
+  .stats-columns {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem;
+    align-items: start;
+  }
+  .stats-column h3 {
+    margin: 0 0 0.5rem; font-size: 0.72rem; color: var(--theme-muted, #7d93a8);
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  }
+  /* ~50 rows' worth before the column's own scrollbar kicks in, rather than
+     an unbounded list stretching the whole drawer taller and taller --
+     "Show all" (below) reveals the rest inline instead of relying on this
+     scroll area to ever hold everything. */
+  .stats-list {
+    list-style: none; margin: 0; padding: 0;
+    max-height: var(--stats-list-h, 340px); overflow-y: auto;
+  }
+  .stats-row {
+    display: flex; align-items: baseline;
+    padding: 0.2rem 0.4rem; border-radius: 5px; cursor: pointer;
+    font-size: 0.78rem; line-height: 1.4;
+  }
+  .stats-row:hover { background: #ffffff0f; }
+  /* Slightly tighter than the Gantt chart's own LABEL_ICON_GAP (12px) --
+     close enough to read as the same emoji-to-text spacing language while
+     suiting this row's smaller layout better. No margin at all when a row
+     has no icon (see statsRowHtml), same as a chart row with zero icons
+     starting flush at the left edge. */
+  .stats-row .stats-icon { flex: none; margin-right: 6px; }
+  .stats-row .stats-label {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--theme-text, #d8e1e8); margin-right: 0.4rem;
+  }
+  .stats-row .stats-count {
+    flex: none; font: 11px ui-monospace, "SF Mono", Menlo, monospace; color: var(--theme-muted, #7d93a8);
+  }
+  /* Left border is each entry's own category color (see markColor) -- the
+     same "color-codes an identity" language the chart's row labels and
+     classification list already use elsewhere, just as a rail here instead
+     of text/dot coloring. */
+  .stats-row { border-left: 3px solid transparent; }
+  .stats-empty { color: #57708a; font-size: 0.78rem; padding: 0.2rem 0.4rem; }
+  .stats-show-all {
+    margin-top: 0.4rem; width: 100%; font-size: 0.72rem; padding: 0.3rem 0.5rem;
+  }
   #logo { height: 32px; width: auto; flex: none; }
+  /* Every top-bar control -- each .cluster, and the plain .meta-group span
+     alongside them -- shares this one explicit height (--topbar-h, set on
+     :root above) rather than each relying on its own content/padding to
+     happen to come out the same. That's what used to make them look
+     uneven: a .ghost button (Refresh/auto-refresh) nested inside a
+     .cluster.pad stacked two layers of padding on top of each other, while
+     .meta-group had none at all -- both now just center their contents
+     (align-items: center, already set) within the same fixed band as the
+     filter bar, the tallest/most content-heavy control in the row. */
   .cluster {
     display: flex; align-items: center; gap: 0.15rem;
     background: #ffffff08; border: 1px solid #ffffff14;
-    border-radius: 12px; padding: 0.25rem;
+    border-radius: 12px; padding: 0 0.25rem;
+    height: var(--topbar-h); box-sizing: border-box;
   }
-  .cluster.pad { padding: 0.3rem 0.7rem; gap: 0.5rem; }
-  #menu-wrap { position: relative; }
+  .cluster.pad { padding: 0 0.7rem; gap: 0.5rem; }
   .icon-btn {
     display: inline-flex; align-items: center; justify-content: center;
-    width: 32px; height: 32px; border-radius: 9px;
+    width: 32px; height: 100%; border-radius: 9px; box-sizing: border-box;
     background: transparent; color: var(--theme-muted, #7d93a8); border: none; cursor: pointer;
+    text-decoration: none;
   }
   .icon-btn:hover { background: #ffffff0f; color: var(--theme-text, #d8e1e8); }
   .icon-btn svg { width: 15px; height: 15px; stroke: currentColor; fill: none; stroke-width: 1.7; }
-  #settings-menu {
-    display: none; position: absolute; top: calc(100% + 0.5rem); left: 0;
-    background: #101820; border: 1px solid var(--theme-border, #2a3a4a); border-radius: 10px;
-    min-width: 9.5rem; padding: 0.35rem; z-index: 5;
-    box-shadow: 0 20px 40px -16px #000c;
-  }
-  #settings-menu.open { display: block; }
-  .dropdown-item {
-    display: block; width: 100%; box-sizing: border-box; text-align: left;
-    background: none; border: none; color: var(--theme-text, #d8e1e8); text-decoration: none;
-    padding: 0.5rem 0.7rem; border-radius: 7px; font-size: 0.78rem; cursor: pointer;
-  }
-  .dropdown-item:hover {
-    background: color-mix(in srgb, var(--theme-accent, #4fd1c5) 15%, transparent);
-    color: var(--theme-accent, #4fd1c5);
-  }
   button {
     background: var(--theme-surface, #16202b); color: #cde; border: 1px solid var(--theme-border, #2a3a4a);
     border-radius: 6px; padding: 0.3rem 0.7rem; cursor: pointer; font-size: 0.8rem;
@@ -79,9 +148,26 @@
   .cap {
     font-size: 9.5px; letter-spacing: 0.09em; color: #57708a; text-transform: uppercase;
   }
-  .meta-group { display: flex; align-items: center; gap: 0.5rem; padding: 0 0.3rem; }
-  #meta { font-size: 0.75rem; color: var(--theme-muted, #7d93a8); }
-  #meta .n { color: var(--theme-text, #d8e1e8); font-weight: 600; font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
+  .meta-group {
+    display: flex; align-items: center; gap: 0.5rem; padding: 0 0.3rem;
+    height: var(--topbar-h); box-sizing: border-box;
+  }
+  /* #meta is a <button> (toggles #stats-panel open/closed, see its click
+     handler near the bottom of this script) -- overriding the generic
+     `button` rule's border/font-size above, but not its background/padding
+     this time: same accent-colored pill treatment as #auto-refresh-toggle.
+     active (below) rather than plain muted text, so this reads as a real
+     button worth clicking instead of blending into the rest of the status
+     line next to it. */
+  #meta {
+    display: inline-flex; align-items: center; gap: 0.3em;
+    font-size: 0.75rem; color: var(--theme-accent, #4fd1c5);
+    background: color-mix(in srgb, var(--theme-accent, #4fd1c5) 13%, transparent);
+    border: none; padding: 0 0.5rem; margin: 0; cursor: pointer; font-family: inherit;
+    border-radius: 9px; height: 100%; box-sizing: border-box;
+  }
+  #meta:hover { background: color-mix(in srgb, var(--theme-accent, #4fd1c5) 22%, transparent); }
+  #meta .n { color: var(--theme-accent, #4fd1c5); font-weight: 600; font: 12px ui-monospace, "SF Mono", Menlo, monospace; }
   .live-dot {
     width: 6px; height: 6px; border-radius: 50%; background: var(--theme-success, #6bcf7f);
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--theme-success, #6bcf7f) 10%, transparent);
@@ -89,6 +175,19 @@
   }
   @media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
   @keyframes header-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+  /* Shown next to the live-dot/device-count while a /api/dots or /api/points
+     request is in flight (see setLoading in loadData) -- same size class and
+     --theme-accent as the rest of the header's small icons/indicators. */
+  .spinner {
+    display: inline-block; width: 12px; height: 12px; flex: none; box-sizing: border-box;
+    border: 1.7px solid color-mix(in srgb, var(--theme-accent, #4fd1c5) 22%, transparent);
+    border-top-color: var(--theme-accent, #4fd1c5);
+    border-radius: 50%;
+    animation: spinner-spin 0.7s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.6s; } }
+  @keyframes spinner-spin { to { transform: rotate(360deg); } }
 
   #height-select input,
   #view-mode,
@@ -123,17 +222,22 @@
     border: solid var(--theme-bg, #0b0f14); border-width: 0 1.6px 1.6px 0; transform: rotate(45deg);
   }
   #top-select input[type="number"]:disabled { opacity: 0.3; }
-  #chart-wrap { overflow-x: auto; }
+  #chart-wrap { overflow-x: auto; position: relative; }
   svg { display: block; }
   .row-label { font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #9fb3c8; }
+  /* Flags a device that has advertised more than one distinct alias -- see
+     multi_alias in app.py and pushRowLabel. Plain blue, not a theme color:
+     this is a fixed status indicator, not something Settings > Appearance
+     should be able to recolor away. */
+  .multi-alias-dot { fill: #4a9eff; }
   .row-count { font: 11px ui-monospace, "SF Mono", Menlo, monospace; fill: #6d8299; }
   /* First/last-seen result cells only (not their column headers, which stay
      at .col-header's size) -- a few sizes smaller than the other result
      columns since a full date+time string is wider than a bare number. */
   .row-count-time { font-size: 8px; }
   .col-header { font: bold 10px sans-serif; fill: #6d8299; text-transform: uppercase; letter-spacing: 0.04em; }
-  .count-header, .alias-header, .uuid-header, .rssi-header, .first-seen-header, .last-seen-header, .mac-header, .tags-header, .service-data-header { cursor: pointer; }
-  .count-header:hover, .alias-header:hover, .uuid-header:hover, .rssi-header:hover, .first-seen-header:hover, .last-seen-header:hover, .mac-header:hover, .tags-header:hover, .service-data-header:hover { fill: #cde; text-decoration: underline; }
+  .count-header, .alias-header, .uuid-header, .rssi-header, .first-seen-header, .last-seen-header, .mac-header, .tags-header, .service-data-header, .type-header { cursor: pointer; }
+  .count-header:hover, .alias-header:hover, .uuid-header:hover, .rssi-header:hover, .first-seen-header:hover, .last-seen-header:hover, .mac-header:hover, .tags-header:hover, .service-data-header:hover, .type-header:hover { fill: #cde; text-decoration: underline; }
   .row-band-odd { fill: #ffffff08; }
   .tick-line { stroke: #ffffff14; stroke-width: 1; }
   .tick-label { font: bold 11px sans-serif; fill: var(--theme-accent, #4fd1c5); }
@@ -145,6 +249,13 @@
   .col-resize-handle { cursor: col-resize; }
   .col-resize-handle:hover { fill: #4fd1c533; }
   body.column-resizing { cursor: col-resize; user-select: none; }
+  body.time-range-selecting { cursor: crosshair; user-select: none; }
+  .time-range-overlay {
+    position: absolute; bottom: 0; pointer-events: none; /* top set inline to TOP_MARGIN */
+    background: color-mix(in srgb, var(--theme-accent, #4fd1c5) 22%, transparent);
+    border-left: 1.5px solid var(--theme-accent, #4fd1c5);
+    border-right: 1.5px solid var(--theme-accent, #4fd1c5);
+  }
   #modal-backdrop {
     display: none;
     position: fixed; inset: 0;
@@ -175,6 +286,15 @@
   #sidebar {
     border-right: 1px solid #1e2a36; padding-right: 1.25rem;
     overflow-y: auto; max-height: calc(84vh - 2.5rem);
+    display: flex; flex-direction: column;
+  }
+  /* margin-top:auto pushes this to the bottom of #sidebar's flex column
+     even when the stats/tags above it are short; position:sticky then
+     keeps it pinned there (rather than scrolling out of view) once the
+     column's own content is tall enough to actually scroll. */
+  .sidebar-footer {
+    margin-top: auto; padding-top: 0.9rem; position: sticky; bottom: 0;
+    background: #101820;
   }
   #sidebar h2 { margin: 0 0 0.9rem; font-size: 1.05rem; line-height: 1.3; }
   .stat-tile {
@@ -283,13 +403,13 @@
 <body>
 <header>
   <img id="logo" src="/logo.png" alt="Bluetooth Demystifier logo">
-  <div class="cluster" id="menu-wrap">
-    <button class="icon-btn" id="hamburger-btn" aria-label="Menu" aria-haspopup="true" aria-expanded="false">
-      <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-    </button>
-    <div id="settings-menu">
-      <a class="dropdown-item" href="/settings">Settings</a>
-    </div>
+  <div class="cluster" id="settings-cluster">
+    <a class="icon-btn" id="settings-link" href="/settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+      </svg>
+    </a>
   </div>
   <div class="cluster pad" id="height-select" title="Total plotted height">
     <label class="cap" for="graph-height">H</label>
@@ -297,7 +417,8 @@
   </div>
   <span class="meta-group">
     <span class="live-dot"></span>
-    <span class="meta" id="meta"></span>
+    <span class="spinner" id="loading-spinner" title="Loading…" aria-label="Loading" style="display:none"></span>
+    <button type="button" class="meta" id="meta" title="Toggle statistics" aria-expanded="false"></button>
   </span>
   <div class="cluster pad">
     <select id="view-mode">
@@ -342,6 +463,31 @@
     </button>
   </div>
 </header>
+<div id="stats-panel">
+  <div class="stats-columns">
+    <div class="stats-column" data-stats-key="oui">
+      <h3>Top MAC Vendors (OUI)</h3>
+      <ul class="stats-list"></ul>
+      <button type="button" class="stats-show-all" hidden></button>
+    </div>
+    <div class="stats-column" data-stats-key="manufacturer">
+      <h3>Top Manufacturer IDs</h3>
+      <ul class="stats-list"></ul>
+      <button type="button" class="stats-show-all" hidden></button>
+    </div>
+    <div class="stats-column" data-stats-key="alias">
+      <h3>All Observed Aliases (Non-MAC)</h3>
+      <ul class="stats-list"></ul>
+      <button type="button" class="stats-show-all" hidden></button>
+    </div>
+    <div class="stats-column" data-stats-key="uuid">
+      <h3>Top UUIDs</h3>
+      <ul class="stats-list"></ul>
+      <button type="button" class="stats-show-all" hidden></button>
+    </div>
+  </div>
+  <div id="stats-resize-handle" title="Drag to resize"></div>
+</div>
 <div id="chart-wrap"><div id="empty">Loading...</div></div>
 <div id="modal-backdrop">
   <div id="modal">
@@ -370,6 +516,15 @@ const TAGS_MAX_CHARS = 24;
 // row happens to have (0, 1, or several).
 const LABEL_ICON_SLOT = 14;
 const LABEL_ICON_GAP = 12;
+// Multi-alias indicator: a small dot right of Alias when a device has
+// advertised more than one distinct alias (see multi_alias/_multi_alias_
+// addresses in app.py). Positioned from the *rendered* name length rather
+// than a fixed offset, since Alias is variable-width; .row-label's font is
+// monospace, so each character is a fixed ~0.6em -- close enough at this
+// size for a small dot to sit right after the text without measuring it.
+const ALIAS_CHAR_WIDTH = 6.6; // 11px monospace glyph width, approx 0.6em
+const MULTI_ALIAS_DOT_GAP = 6;
+const MULTI_ALIAS_DOT_RADIUS = 3;
 const TOP_MARGIN = 30;
 const RIGHT_PADDING = 20;
 const MIN_DOT_WIDTH = 5;
@@ -386,6 +541,10 @@ const MAX_COLUMN_WIDTH = 400;
 // ALLOWED_COLUMNS/DEFAULT_COLUMN_ORDER in app.py. `hint` is the column
 // header's tooltip; count's differs by view (see countHint below) so it's
 // left out here and filled in at render time instead.
+// Display labels for devices.bearer ('le'/'bredr', see classify_bearer in
+// bluez_monitor.py) -- shared by the Type column below and the device modal.
+const BEARER_LABELS = { bredr: 'BR/EDR', le: 'BLE' };
+
 const COLUMN_DEFS = {
   count: { label: 'Count', width: 50, headerClass: 'count-header' },
   rssi: { label: 'RSSI', width: 50, headerClass: 'rssi-header', hint: 'Click to sort by most recent RSSI (dBm)' },
@@ -404,11 +563,15 @@ const COLUMN_DEFS = {
     label: 'Service Data', width: 90, headerClass: 'service-data-header',
     hint: 'Click to sort by total historic service data bytes',
   },
+  type: {
+    label: 'Type', width: 65, headerClass: 'type-header',
+    hint: 'Click to sort by BR/EDR vs BLE',
+  },
 };
 // Columns whose sort cycles asc-first (like a name) rather than desc-first
 // (like a magnitude) -- see setSort. Alias itself isn't in COLUMN_DEFS (it's
 // not optional) but follows the same asc-first rule.
-const SORT_ASC_FIRST_KEYS = new Set(['alias', 'mac', 'tags']);
+const SORT_ASC_FIRST_KEYS = new Set(['alias', 'mac', 'tags', 'type']);
 
 // Fallback used until /api/columns resolves (or if it fails) -- mirrors
 // app.py's DEFAULT_COLUMN_ORDER/DEFAULT_HIDDEN_COLUMNS/DEFAULT_COLUMN_WIDTHS
@@ -422,6 +585,7 @@ let columnConfig = [
   { key: 'first_seen', visible: true, width: 110 },
   { key: 'last_seen', visible: true, width: 110 },
   { key: 'mac', visible: false, width: 130 },
+  { key: 'type', visible: true, width: 65 },
   { key: 'tags', visible: true, width: 160 },
   { key: 'service_data', visible: false, width: 90 },
 ];
@@ -519,6 +683,34 @@ function truncate(str, maxChars) {
   return str.length > maxChars ? str.slice(0, maxChars - 1) + '…' : str;
 }
 
+// One classification's `icon` field is usually a single emoji, but isn't
+// always -- e.g. manufacturerdata_names.icon can hold more than one glyph
+// concatenated together (no separator, same as icons from different
+// classifications are never separated by anything either -- see
+// _icons_string in app.py). Each array entry from the API is one
+// classification's whole icon string, so a two-glyph one still counts (and
+// used to render) as a single LABEL_ICON_SLOT-wide unit, overflowing into
+// whatever sits right after it -- flattened here into one glyph per array
+// entry via Intl.Segmenter's grapheme-cluster boundaries (correct even for
+// multi-codepoint emoji -- flags, ZWJ sequences, skin-tone modifiers --
+// unlike splitting on raw JS characters/code points) so every glyph gets
+// its own slot.
+const ICON_SEGMENTER = (typeof Intl !== 'undefined' && Intl.Segmenter)
+  ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+  : null;
+function splitIconGlyphs(icons) {
+  const glyphs = [];
+  for (const icon of icons) {
+    if (!icon) continue;
+    if (ICON_SEGMENTER) {
+      for (const { segment } of ICON_SEGMENTER.segment(icon)) glyphs.push(segment);
+    } else {
+      glyphs.push(...icon); // code-point split fallback (Intl.Segmenter unsupported)
+    }
+  }
+  return glyphs;
+}
+
 // Shared by render() and renderPoints(): draws a row's icons (a device can
 // match several categories -- see device_classifications) and alias/address
 // name as separate text elements so the name can be indented consistently
@@ -532,7 +724,7 @@ function pushRowLabel(svg, address, first, y, maxIcons, rowHeight) {
   const style = labelColor ? ` style="fill:${labelColor}"` : '';
   const title = `<title>${escapeXml(address)} (click for details)</title>`;
   const nameY = y + rowHeight / 2 + 4;
-  const icons = first.icons || [];
+  const icons = splitIconGlyphs(first.icons || []);
   icons.forEach((icon, i) => {
     svg.push(
       `<text class="row-label" data-address="${escapeXml(address)}" ` +
@@ -544,6 +736,13 @@ function pushRowLabel(svg, address, first, y, maxIcons, rowHeight) {
     `<text class="row-label" data-address="${escapeXml(address)}"${style} ` +
     `x="${nameX}" y="${nameY}">${escapeXml(name)}${title}</text>`
   );
+  if (first.multi_alias) {
+    const dotX = nameX + name.length * ALIAS_CHAR_WIDTH + MULTI_ALIAS_DOT_GAP;
+    svg.push(
+      `<circle class="multi-alias-dot" cx="${dotX}" cy="${nameY - 4}" r="${MULTI_ALIAS_DOT_RADIUS}">` +
+      `<title>This device has advertised more than one alias -- see its details for the full history</title></circle>`
+    );
+  }
 }
 
 function formatTick(ms, spanMs, step) {
@@ -710,7 +909,7 @@ function render(dots, windowStart, windowEnd) {
   // Computed before the header row so "Alias" can line up at the same x as
   // the name text itself (see pushRowLabel/nameX) -- not the fixed left
   // edge -- whenever any row in view actually has an icon.
-  const maxIcons = Math.max(0, ...sortedRows.map(r => (r.first.icons || []).length));
+  const maxIcons = Math.max(0, ...sortedRows.map(r => splitIconGlyphs(r.first.icons || []).length));
   const aliasHeaderX = maxIcons > 0 ? 6 + maxIcons * LABEL_ICON_SLOT + LABEL_ICON_GAP : 6;
 
   const aliasArrow = sortState.key === 'alias' ? (sortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
@@ -749,7 +948,12 @@ function render(dots, windowStart, windowEnd) {
   pushColumnResizeHandles(svg, layout, height);
   svg.push('</svg>');
   wrap.innerHTML = svg.join('');
-  meta.innerHTML = `<span class="n">${sortedRows.length}</span> devices seen`;
+  // Two spans, not "</span> devices seen" as one text run -- #meta is a
+  // flex container (see its CSS), and a flex container collapses the
+  // leading space of a plain text node the same way a block box would,
+  // so a literal space at this boundary silently disappears. gap on #meta
+  // supplies the spacing instead.
+  meta.innerHTML = `<span class="n">${sortedRows.length}</span><span>devices seen</span>`;
 }
 
 // Points view: same row-per-device layout as render(), but each row plots
@@ -799,7 +1003,7 @@ function renderPoints(points, windowStart, windowEnd) {
   // Computed before the header row so "Alias" can line up at the same x as
   // the name text itself (see pushRowLabel/nameX) -- not the fixed left
   // edge -- whenever any row in view actually has an icon.
-  const maxIcons = Math.max(0, ...sortedRows.map(r => (r.first.icons || []).length));
+  const maxIcons = Math.max(0, ...sortedRows.map(r => splitIconGlyphs(r.first.icons || []).length));
   const aliasHeaderX = maxIcons > 0 ? 6 + maxIcons * LABEL_ICON_SLOT + LABEL_ICON_GAP : 6;
 
   const aliasArrow = sortState.key === 'alias' ? (sortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
@@ -839,7 +1043,12 @@ function renderPoints(points, windowStart, windowEnd) {
   pushColumnResizeHandles(svg, layout, height);
   svg.push('</svg>');
   wrap.innerHTML = svg.join('');
-  meta.innerHTML = `<span class="n">${sortedRows.length}</span> devices seen`;
+  // Two spans, not "</span> devices seen" as one text run -- #meta is a
+  // flex container (see its CSS), and a flex container collapses the
+  // leading space of a plain text node the same way a block box would,
+  // so a literal space at this boundary silently disappears. gap on #meta
+  // supplies the spacing instead.
+  meta.innerHTML = `<span class="n">${sortedRows.length}</span><span>devices seen</span>`;
 }
 
 function toApiIso(date) {
@@ -857,87 +1066,228 @@ function currentWindow() {
   };
 }
 
+// Text/tag search, equals/not-equals, and the top-N-by-address cap are all
+// applied server-side now (see _parse_query_filter/_filter_matches/
+// _limit_to_top_addresses in app.py) -- the server only ever returns rows
+// that already belong on screen, so loadData() is the single place that
+// both fetches and renders; there's no separate client-side filter pass
+// left to run on the result.
+function currentFilterParams() {
+  const params = new URLSearchParams();
+  const filterText = document.getElementById('filter-box').value;
+  if (filterText.trim() !== '') params.set('q', filterText);
+  if (document.getElementById('filter-mode').value === 'not-equals') params.set('mode', 'not-equals');
+  if (document.getElementById('top-enabled').checked) {
+    const topN = Math.max(1, Number(document.getElementById('top-n').value) || 10);
+    params.set('top', String(topN));
+  }
+  return params;
+}
+
+// Counts requests in flight rather than a plain boolean, so the spinner
+// only clears once every overlapping loadData() call has settled -- e.g.
+// auto-refresh firing while a debounced filter-box edit is still pending.
+let loadingCount = 0;
+function setLoading(loading) {
+  loadingCount += loading ? 1 : -1;
+  document.getElementById('loading-spinner').style.display = loadingCount > 0 ? '' : 'none';
+}
+
+// Same start/end/q/mode/top params loadData() builds for /api/dots or
+// /api/points -- shared with /api/stats (see loadStats) so the stats
+// drawer always reports on exactly the same "currently shown" window/
+// filter/top-N the chart itself is using.
+function currentQueryParams() {
+  const { start, end } = currentWindow();
+  const params = currentFilterParams();
+  if (start) params.set('start', toApiIso(start));
+  if (end) params.set('end', toApiIso(end));
+  return params;
+}
+
 async function loadData() {
   const { start, end } = currentWindow();
-  const params = new URLSearchParams();
+  const params = currentFilterParams();
   if (start) params.set('start', toApiIso(start));
   if (end) params.set('end', toApiIso(end));
   const endpoint = viewMode === 'points' ? '/api/points' : '/api/dots';
-  const res = await fetch(endpoint + '?' + params.toString());
-  const data = await res.json();
-  if (viewMode === 'points') {
-    allPoints = data;
-  } else {
-    allDots = data;
+  setLoading(true);
+  try {
+    const res = await fetch(endpoint + '?' + params.toString());
+    const data = await res.json();
+    const windowStart = start ? start.getTime() : null;
+    const windowEnd = end ? end.getTime() : null;
+    if (viewMode === 'points') {
+      allPoints = data;
+      renderPoints(data, windowStart, windowEnd);
+    } else {
+      allDots = data;
+      render(data, windowStart, windowEnd);
+    }
+  } finally {
+    setLoading(false);
   }
-  applyFilter(start ? start.getTime() : null, end ? end.getTime() : null);
+  loadStats(params);
 }
 
-// Live substring filter over the server-built `search` blob (address, alias,
-// manufacturer, classification, service/solicited UUIDs + names, service
-// data, tags -- every field surfaced anywhere in the UI, including the
-// detail modal). Plain String#includes works for emoji too since both the
-// query and the blob are compared as-is (UTF-16 code units), no case
-// folding needed beyond .toLowerCase(), which is a no-op on emoji.
-//
-// Multiple terms can be given separated by `;` (e.g. "govee;apple;printer"),
-// each run as its own independent search whose matches are combined (OR'd)
-// together -- not a single search requiring every term. `+` is the other
-// top-level separator, combined the opposite way (AND) -- "govee+printer"
-// requires BOTH sides to match. The two combine into a two-level (CNF-style)
-// expression: `+` is split first (outermost), so each `+`-side can itself
-// still be a `;`-separated OR group -- "a;b+c" means (a OR b) AND c, not
-// (a OR b OR c) or "a OR (b AND c)". A literal `;` or `+` can still be
-// searched for by escaping it (`\;`, `\+`) -- see unescapeFilterText.
-//
-// Within one `;`-alternative, words are further split on whitespace and ALL
-// of them must appear SOMEWHERE in the blob (AND), not necessarily adjacent
-// -- so a multi-word tag like "living room" (or a query like "apple watch")
-// matches regardless of which field each word actually lands in, rather than
-// requiring the exact contiguous phrase. A single word behaves exactly as
-// before.
-function unescapeFilterText(s) {
-  return s.replace(/\\;/g, ';').replace(/\\\+/g, '+');
+// Re-draws whatever loadData() last fetched, against the same time window,
+// with no new request -- for UI changes that only affect layout (a resize,
+// a graph-height tweak), not which rows are in the result.
+function renderCurrent() {
+  const win = lastWindow || { start: null, end: null };
+  if (viewMode === 'points') {
+    renderPoints(allPoints || [], win.start, win.end);
+  } else {
+    render(allDots || [], win.start, win.end);
+  }
 }
 
-function parseFilterTerms(raw) {
-  // (?<!\\) below is what makes `\;`/`\+` stick to their group instead of
-  // splitting there -- the escaped separator (backslash and all) rides
-  // along in the piece until unescapeFilterText resolves it, once no more
-  // splitting on it is left to do.
-  return raw.split(/(?<!\\)\+/)
-    .map(andGroup => andGroup.split(/(?<!\\);/)
-      .map(alt => unescapeFilterText(alt).trim().toLowerCase().split(/\s+/).filter(Boolean))
-      .filter(words => words.length > 0))
-    .filter(alts => alts.length > 0);
+// ---- Stats drawer (#stats-panel) ----
+// All four columns' counting/sorting happens server-side (/api/stats, given
+// the exact same start/end/q/mode/top params as loadData() -- see
+// currentQueryParams()); this is purely rendering plus the click-to-filter
+// wiring. Only fetched while the drawer is actually open -- no point
+// computing it on every auto-refresh tick if nobody's looking at it.
+const STATS_COLUMN_KEYS = ['oui', 'manufacturer', 'alias', 'uuid'];
+const STATS_PAGE_SIZE = 50;
+
+async function loadStats(params) {
+  if (!document.getElementById('stats-panel').classList.contains('open')) return;
+  let data = null;
+  try {
+    const res = await fetch('/api/stats?' + params.toString());
+    data = await res.json();
+  } catch (err) {
+    // Leave columns at whatever they last showed rather than clearing them
+    // on a transient fetch failure.
+    return;
+  }
+  for (const key of STATS_COLUMN_KEYS) {
+    renderStatsColumn(key, (data && data[key]) || []);
+  }
 }
 
-function applyFilter(windowStart, windowEnd) {
-  const win = windowStart !== undefined ? { start: windowStart, end: windowEnd }
-    : (lastWindow || { start: null, end: null });
-  const terms = parseFilterTerms(document.getElementById('filter-box').value);
-  const notEquals = document.getElementById('filter-mode').value === 'not-equals';
-  // Empty filter box: show everything in both modes -- "not equals" with no
-  // terms to exclude has nothing to hide, so it isn't treated as "hide all".
-  const matches = blob => {
-    if (terms.length === 0) return true;
-    // terms.every: every `+`-separated group must match (AND). alts.some:
-    // within a group, any one `;`-alternative matching is enough (OR).
-    // words.every: within an alternative, every whitespace-split word must
-    // appear (AND) -- see parseFilterTerms.
-    const isMatch = terms.every(alts => alts.some(words => words.every(w => blob.includes(w))));
-    return notEquals ? !isMatch : isMatch;
+function statsRowHtml(entry) {
+  const icon = entry.icon ? `<span class="stats-icon">${escapeXml(entry.icon)}</span>` : '';
+  return (
+    `<li class="stats-row" style="border-left-color:${markColor(entry.color)}" data-filter="${escapeXml(entry.filter)}">` +
+    icon +
+    `<span class="stats-label">${escapeXml(entry.label)}</span>` +
+    `<span class="stats-count">${(entry.count || 0).toLocaleString()}</span>` +
+    '</li>'
+  );
+}
+
+// First STATS_PAGE_SIZE entries render immediately; the rest stay off the
+// DOM entirely until "Show all" is clicked (rather than rendered-but-
+// hidden), since a column can in principle hold every distinct value ever
+// observed -- no reason to pay for that DOM up front on every refresh.
+function renderStatsColumn(key, entries) {
+  const column = document.querySelector(`.stats-column[data-stats-key="${key}"]`);
+  const list = column.querySelector('.stats-list');
+  const showAllBtn = column.querySelector('.stats-show-all');
+  if (entries.length === 0) {
+    list.innerHTML = '<li class="stats-empty">No data</li>';
+    showAllBtn.hidden = true;
+    return;
+  }
+  const rest = entries.slice(STATS_PAGE_SIZE);
+  list.innerHTML = entries.slice(0, STATS_PAGE_SIZE).map(statsRowHtml).join('');
+  if (rest.length === 0) {
+    showAllBtn.hidden = true;
+    return;
+  }
+  showAllBtn.hidden = false;
+  showAllBtn.textContent = `Show all (${rest.length} more)`;
+  showAllBtn.onclick = () => {
+    list.insertAdjacentHTML('beforeend', rest.map(statsRowHtml).join(''));
+    showAllBtn.hidden = true;
   };
-  if (viewMode === 'points') {
-    let points = (allPoints || []).filter(p => matches(p.search));
-    points = limitToTopAddresses(points, () => 1);
-    renderPoints(points, win.start, win.end);
-  } else {
-    let dots = (allDots || []).filter(d => matches(d.search));
-    dots = limitToTopAddresses(dots, d => d.obs_count || 0);
-    render(dots, win.start, win.end);
-  }
 }
+
+// Escapes the filter bar's two syntax characters (see _parse_filter_terms
+// in app.py: '+' separates AND-groups, ';' separates OR-alternatives within
+// one) so a raw value containing either -- an alias with a literal "+", say
+// -- still lands as one plain literal term instead of being parsed as query
+// syntax it never meant to contain.
+function escapeFilterTerm(raw) {
+  return raw.replace(/([;+])/g, '\\$1');
+}
+
+// Adds a stats row's raw (unformatted) value to the filter bar, or sets it
+// outright if the box is empty. In Equals mode this is an AND-term ('+') --
+// clicking a second value narrows to devices matching both. In Not equals
+// mode, _filter_matches inverts the *entire* match, so joining with '+'
+// there would build "hide only devices matching every excluded value at
+// once" (each an independent AND-group) rather than "hide devices matching
+// any of them" -- joining excluded values with ';' instead (one OR-group)
+// gets the AND-of-NOTs exclusion that's actually intended when excluding
+// more than one value.
+function addFilterTerm(raw) {
+  const box = document.getElementById('filter-box');
+  const escaped = escapeFilterTerm(raw);
+  if (box.value.trim() === '') {
+    box.value = escaped;
+    return;
+  }
+  const notEquals = document.getElementById('filter-mode').value === 'not-equals';
+  box.value = box.value + (notEquals ? ';' : '+') + escaped;
+}
+
+document.getElementById('stats-panel').addEventListener('click', (e) => {
+  const row = e.target.closest('.stats-row');
+  if (!row) return;
+  addFilterTerm(row.dataset.filter);
+  loadData();
+});
+
+// Drag-resize for the stats drawer (#stats-resize-handle, at the panel's
+// bottom edge). Adjusts --stats-list-h, which .stats-list's max-height reads
+// from -- the drawer itself has no fixed height, it just grows/shrinks to
+// fit however tall that makes the four lists. Persisted in localStorage
+// rather than server-side like columnConfig, since it's a per-browser
+// display preference, not part of the exported column config.
+const STATS_LIST_HEIGHT_KEY = 'statsListHeight';
+const DEFAULT_STATS_LIST_HEIGHT = 340;
+const MIN_STATS_LIST_HEIGHT = 80;
+const MAX_STATS_LIST_HEIGHT = 1000;
+
+function setStatsListHeight(px) {
+  const clamped = Math.max(MIN_STATS_LIST_HEIGHT, Math.min(MAX_STATS_LIST_HEIGHT, Math.round(px)));
+  document.getElementById('stats-panel').style.setProperty('--stats-list-h', clamped + 'px');
+  return clamped;
+}
+
+(function initStatsListHeight() {
+  const stored = parseInt(localStorage.getItem(STATS_LIST_HEIGHT_KEY), 10);
+  if (!Number.isNaN(stored)) setStatsListHeight(stored);
+})();
+
+let statsResize = null; // { startY, startHeight }
+
+document.getElementById('stats-resize-handle').addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  const current = parseInt(
+    getComputedStyle(document.getElementById('stats-panel')).getPropertyValue('--stats-list-h'), 10
+  );
+  statsResize = { startY: e.clientY, startHeight: Number.isNaN(current) ? DEFAULT_STATS_LIST_HEIGHT : current };
+  document.body.classList.add('stats-resizing');
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!statsResize) return;
+  setStatsListHeight(statsResize.startHeight + (e.clientY - statsResize.startY));
+});
+
+window.addEventListener('mouseup', () => {
+  if (!statsResize) return;
+  statsResize = null;
+  document.body.classList.remove('stats-resizing');
+  const height = parseInt(
+    getComputedStyle(document.getElementById('stats-panel')).getPropertyValue('--stats-list-h'), 10
+  );
+  if (!Number.isNaN(height)) localStorage.setItem(STATS_LIST_HEIGHT_KEY, height);
+});
 
 // Sum of obs_count (adverts folded into each session) across every session
 // for a device -- the actual number of BLE advertisements captured, not just
@@ -996,26 +1346,21 @@ function lastSeenMsPoint(items) {
 // Column display for an absolute first/last-seen timestamp -- always shows
 // both date and time (unlike formatTick's axis labels, which drop the date
 // once the visible span is under a day), since a row's timestamp can't lean
-// on neighboring ticks for context the way an axis label can.
+// on neighboring ticks for context the way an axis label can. Includes
+// seconds so readings that land less than a minute apart (e.g. RSSI
+// history, alias history) don't show duplicate timestamps.
 function formatCellTime(ms) {
-  return new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return new Date(ms).toLocaleString([], {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
 }
 
 // Same normalized display as formatCellTime, just taking the raw ISO string
-// timestamps the device modal gets from the API (First/Last seen, service
-// data entries) come as, instead of each rendering the bare ISO string.
+// timestamps the device modal gets from the API (First/Last seen, alias
+// history, service data entries, RSSI history) come as, instead of each
+// rendering the bare ISO string.
 function formatIsoTime(iso) {
   return iso ? formatCellTime(Date.parse(iso)) : '—';
-}
-
-// Same as formatIsoTime, but with seconds -- used only by the RSSI history
-// table (renderRssiHistoryTable), where readings can land less than a
-// minute apart and minute-only resolution would show duplicate timestamps.
-function formatIsoTimeWithSeconds(iso) {
-  if (!iso) return '—';
-  return new Date(Date.parse(iso)).toLocaleString([], {
-    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
 }
 
 // Per-row values for every sortable/displayable optional column, computed
@@ -1056,7 +1401,7 @@ function rowMetrics(view, items) {
 function sortRows(rows) {
   const { key, dir } = sortState;
   if (!key || !dir) return [...rows].sort((a, b) => a.chrono - b.chrono);
-  const isString = key === 'alias' || key === 'mac' || key === 'tags';
+  const isString = key === 'alias' || key === 'mac' || key === 'tags' || key === 'type';
   return [...rows].sort((a, b) => {
     let av, bv;
     if (key === 'alias') {
@@ -1068,6 +1413,9 @@ function sortRows(rows) {
     } else if (key === 'tags') {
       av = (a.first.tags || []).join(', ').toLowerCase();
       bv = (b.first.tags || []).join(', ').toLowerCase();
+    } else if (key === 'type') {
+      av = (a.first.bearer || '').toLowerCase();
+      bv = (b.first.bearer || '').toLowerCase();
     } else {
       av = a[key];
       bv = b[key];
@@ -1098,7 +1446,7 @@ function setSort(key) {
   } else {
     sortState = { key: null, dir: null };
   }
-  applyFilter();
+  renderCurrent();
 }
 
 // Header row for the optional columns (Alias's own header is pushed
@@ -1156,6 +1504,9 @@ function pushRowCells(svg, layout, row, y, rowHeight, countHint) {
         `<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${row.service_data} B` +
         `<title>Total bytes across every distinct service data payload change ever observed</title></text>`
       );
+    } else if (key === 'type') {
+      const label = BEARER_LABELS[row.first.bearer] || '—';
+      svg.push(`<text class="${cls}" x="${x}" y="${ty}" text-anchor="end">${label}</text>`);
     }
   }
 }
@@ -1181,25 +1532,11 @@ function pushColumnResizeHandles(svg, layout, height) {
   }
 }
 
-// Ranks devices by a weight summed across the currently filtered set (total
-// adverts captured for the window view, total individual observations for
-// the points view) and keeps only the top N -- a declutter control, not a
-// change to row order.
-function limitToTopAddresses(items, weightFn) {
-  const enabled = document.getElementById('top-enabled').checked;
-  const topN = Math.max(1, Number(document.getElementById('top-n').value) || 10);
-  document.getElementById('top-n').disabled = !enabled;
-  if (!enabled) return items;
-
-  const counts = new Map();
-  for (const item of items) counts.set(item.address, (counts.get(item.address) || 0) + weightFn(item));
-  const topAddresses = new Set(
-    [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
-      .slice(0, topN)
-      .map(([address]) => address)
-  );
-  return items.filter(item => topAddresses.has(item.address));
+// The top-N-by-address ranking itself now happens server-side (see
+// _limit_to_top_addresses in app.py) -- this is purely a UI nicety, since
+// the top-N number field is only meaningful once "Top" is checked.
+function syncTopNEnabled() {
+  document.getElementById('top-n').disabled = !document.getElementById('top-enabled').checked;
 }
 
 function toDatetimeLocal(date) {
@@ -1347,7 +1684,7 @@ function uuidList(list) {
 function renderRssiHistoryTable(history) {
   if (!history.length) return '<div class="muted">None observed</div>';
   const rows = history.map(p =>
-    `<tr><td>${formatIsoTimeWithSeconds(p.seen_at)}</td><td>${p.rssi} dBm</td></tr>`
+    `<tr><td>${formatIsoTime(p.seen_at)}</td><td>${p.rssi} dBm</td></tr>`
   ).join('');
   // thead/tbody (not one flat run of <tr>s) so the header row is excluded
   // from tbody tr:nth-child's zebra striping below -- otherwise the header
@@ -1469,10 +1806,10 @@ function renderDeviceInfo(info) {
   // Service UUID match can all resolve to the same glyph -- see
   // _icons_string in app.py for the main chart's equivalent dedup), not
   // just the primary one.
-  const titleIcons = [...new Set(info.classifications.map(c => c.icon).filter(Boolean))].join('');
+  const titleIcons = [...new Set(splitIconGlyphs(info.classifications.map(c => c.icon)))].join('');
   const titleText = (titleIcons ? titleIcons + ' ' : '') + (info.alias || info.address);
 
-  const bearerLabel = {bredr: 'BR/EDR', le: 'BLE'}[info.bearer] || '—';
+  const bearerLabel = BEARER_LABELS[info.bearer] || '—';
 
   // info.rssi is {last, best, avg} (see _device_rssi_stats in app.py) --
   // each independently null if this device has no RSSI-bearing observation
@@ -1492,31 +1829,48 @@ function renderDeviceInfo(info) {
   // organization (see device_classifications' `source` column) --
   // manufacturer's/uuid's category_name instead holds the vendor's own name
   // (e.g. "Apple, Inc.") straight from manufacturerdata_names/uuid_lookups.
+  //
+  // Two distinct OUIs/manufacturer IDs/service UUIDs can all resolve to the
+  // same vendor or category name (e.g. two different Google-owned UUIDs
+  // both named "Google"), which used to render as identical-looking,
+  // unexplained duplicate entries. Every source's identifying value (OUI,
+  // manufacturer ID, or UUID) is shown to the right of the classification
+  // instead, so entries that look alike can still be told apart by what
+  // actually produced the match.
   const classificationsHtml = info.classifications.length
     ? info.classifications.map(c => {
-        const sourceHtml = c.source === 'ouid'
-          ? `<strong>${escapeXml(c.org_name)}</strong> (${escapeXml(c.oui)})`
+        const label = c.source === 'ouid'
+          ? `<strong>${escapeXml(c.org_name)}</strong>`
+          : escapeXml(c.category_name || '');
+        const detail = c.source === 'ouid'
+          ? (c.oui ? `OUI ${escapeXml(c.oui)}` : null)
           : c.source === 'manufacturer'
-          ? '<span class="muted">via ManufacturerData</span>'
+          ? (c.manufacturer_id != null
+              ? `Manufacturer ID 0x${Number(c.manufacturer_id).toString(16).toUpperCase().padStart(4, '0')}`
+              : null)
           : c.source === 'uuid'
-          ? '<span class="muted">via Service UUID</span>'
-          : '<span class="muted">matched via alias</span>';
-        return `<li>${c.icon || ''} ${sourceHtml}` +
-          (c.category_name ? ` — ${escapeXml(c.category_name)}` : '') +
+          ? (c.uuid ? `UUID ${escapeXml(c.uuid)}` : null)
+          : 'matched via alias';
+        return `<li>${c.icon || ''} ${label}` +
+          (c.source === 'ouid' && c.category_name ? ` — ${escapeXml(c.category_name)}` : '') +
+          (detail ? ` <span class="muted">(${detail})</span>` : '') +
           '</li>';
       }).join('')
     : '<li class="muted">No classification match</li>';
 
-  // Every distinct alias this device has ever advertised (see ALIAS_HISTORY_
-  // QUERY/device_alias_history), deduplicated to one entry per unique alias
-  // text showing when it was FIRST seen (not every run, e.g. a revert back
-  // to an earlier alias) -- newest unique alias first. Separate from the
+  // Every alias RUN this device has ever advertised (see ALIAS_HISTORY_
+  // QUERY/device_alias_history), newest first -- one entry per contiguous
+  // period of that alias, so the same alias text can appear more than once
+  // if the device reverted back to it after advertising something else in
+  // between (each entry's own first/last seen reflects just that period,
+  // not merged with any other run of the same text). Separate from the
   // sidebar's title/Address table above, which only ever shows the CURRENT
   // alias (info.alias, devices.alias's latest value).
   const aliasHistoryHtml = info.alias_history.length
     ? info.alias_history.map(a =>
         `<li>${escapeXml(a.alias)} ` +
-        `<span class="muted">(first seen ${formatIsoTime(a.first_seen_at)})</span></li>`
+        `<span class="muted">(first seen ${formatIsoTime(a.first_seen_at)}, ` +
+        `last seen ${formatIsoTime(a.last_seen_at)})</span></li>`
       ).join('')
     : '<li class="muted">None observed</li>';
 
@@ -1567,6 +1921,9 @@ function renderDeviceInfo(info) {
         <div class="stat-value">${(info.observation_count || 0).toLocaleString()}</div>
       </div>
       <table class="kv compact">${compactRows.map(([k, v]) => `<tr><th>${k}</th><td>${v}</td></tr>`).join('')}</table>
+      <div class="sidebar-footer">
+        <button type="button" id="export-csv-btn">Export CSV</button>
+      </div>
     </div>
     <div id="content">
       <section>
@@ -1851,6 +2208,14 @@ function renderConnectButton(state) {
 //    never confirm it, so this doesn't wait for confirmation at all -- it
 //    goes straight back to "Connect", same as bluez_monitor.py firing the
 //    bluetoothctl disconnect and immediately moving on regardless.
+// A plain navigation (not fetch+Blob) -- /api/device/<address>/export.csv
+// sends Content-Disposition: attachment, so the browser downloads the
+// response instead of navigating away from the page.
+function exportDeviceCsv() {
+  if (!currentDeviceAddress) return;
+  window.location.href = `/api/device/${encodeURIComponent(currentDeviceAddress)}/export.csv`;
+}
+
 function toggleConnection() {
   const address = currentDeviceAddress;
   const btn = document.getElementById('connect-btn');
@@ -1872,15 +2237,6 @@ function toggleConnection() {
   }).catch(() => {
     // Best-effort -- the ongoing connect-status poll reconciles either way.
   });
-}
-
-// Settings is a real page (/settings), not a modal -- this dropdown just
-// toggles open/closed; the "Settings" item inside is a plain <a>.
-function toggleSettingsMenu(show) {
-  const menu = document.getElementById('settings-menu');
-  const open = show === undefined ? !menu.classList.contains('open') : show;
-  menu.classList.toggle('open', open);
-  document.getElementById('hamburger-btn').setAttribute('aria-expanded', String(open));
 }
 
 document.getElementById('chart-wrap').addEventListener('click', (e) => {
@@ -1924,7 +2280,7 @@ window.addEventListener('mousemove', (e) => {
     columnResizeRafPending = true;
     requestAnimationFrame(() => {
       columnResizeRafPending = false;
-      if (allDots || allPoints) applyFilter();
+      if (allDots || allPoints) renderCurrent();
     });
   }
 });
@@ -1952,12 +2308,116 @@ async function saveColumnWidths() {
     // Best-effort, see above.
   }
 }
+
+// Click-and-drag time-range selection: dragging across the plot area (the
+// dots/points region itself, not the row-label/optional-column cells to its
+// left or the header row above it) previews a highlighted band and, on
+// release, feeds the dragged span into the time-range controls as an
+// absolute Range and reloads the chart zoomed to it. Tracked as plain
+// module state (like columnResize above) rather than per-element
+// listeners, since the whole SVG is destroyed and recreated on every
+// render()/renderPoints().
+let timeRangeDrag = null; // { plotLeft, plotRight, startX, domain }
+let timeRangeOverlayEl = null;
+const TIME_RANGE_DRAG_MIN_PX = 5; // shorter than this reads as a stray click, not a selection
+
+// Mirrors the minTime/maxTime/padding domain math render()/renderPoints()
+// each compute locally for their own scaleX -- duplicated here rather than
+// shared since "what's currently plotted" is just whichever of
+// allDots/allPoints + lastWindow was last rendered. Returns null before the
+// first render (nothing to select against yet).
+function currentChartDomain() {
+  const items = viewMode === 'points' ? allPoints : allDots;
+  if (!items || items.length === 0) return null;
+  const win = lastWindow || { start: null, end: null };
+  const startMsOf = viewMode === 'points' ? (p => p.seenMs) : (d => d.startMs);
+  const endMsOf = viewMode === 'points' ? (p => p.seenMs) : (d => d.endMs);
+  const minTime = win.start != null ? win.start : Math.min(...items.map(startMsOf));
+  const maxTime = win.end != null ? win.end : Math.max(...items.map(endMsOf));
+  const span = Math.max(maxTime - minTime, 1000);
+  const padding = win.start != null && win.end != null ? 0 : span * 0.02;
+  return { domainStart: minTime - padding, domainEnd: maxTime + padding };
+}
+
+// Content-space x (accounts for #chart-wrap's own horizontal scroll, which
+// getBoundingClientRect() doesn't) for a mouse event, clamped to the plot
+// area's pixel bounds.
+function plotClientX(e, plotLeft, plotRight) {
+  const wrap = document.getElementById('chart-wrap');
+  const rect = wrap.getBoundingClientRect();
+  const x = e.clientX - rect.left + wrap.scrollLeft;
+  return Math.max(plotLeft, Math.min(plotRight, x));
+}
+
+document.getElementById('chart-wrap').addEventListener('mousedown', (e) => {
+  if (e.target.closest('.col-resize-handle, .row-label, .col-header')) return;
+  const domain = currentChartDomain();
+  if (!domain) return;
+  const layout = computeColumnLayout();
+  const plotLeft = layout.plotStart;
+  const plotRight = chartWidth() - RIGHT_PADDING;
+  const rect = document.getElementById('chart-wrap').getBoundingClientRect();
+  if (e.clientY - rect.top < TOP_MARGIN) return;
+  const startX = plotClientX(e, plotLeft, plotRight);
+  if (startX < plotLeft || startX > plotRight) return;
+  e.preventDefault();
+  timeRangeDrag = { plotLeft, plotRight, startX, domain };
+  document.body.classList.add('time-range-selecting');
+  timeRangeOverlayEl = document.createElement('div');
+  timeRangeOverlayEl.className = 'time-range-overlay';
+  timeRangeOverlayEl.style.top = `${TOP_MARGIN}px`;
+  timeRangeOverlayEl.style.left = `${startX}px`;
+  timeRangeOverlayEl.style.width = '0px';
+  document.getElementById('chart-wrap').appendChild(timeRangeOverlayEl);
+});
+
+window.addEventListener('mousemove', (e) => {
+  if (!timeRangeDrag) return;
+  const x = plotClientX(e, timeRangeDrag.plotLeft, timeRangeDrag.plotRight);
+  const left = Math.min(timeRangeDrag.startX, x);
+  const right = Math.max(timeRangeDrag.startX, x);
+  if (timeRangeOverlayEl) {
+    timeRangeOverlayEl.style.left = `${left}px`;
+    timeRangeOverlayEl.style.width = `${right - left}px`;
+  }
+});
+
+window.addEventListener('mouseup', (e) => {
+  if (!timeRangeDrag) return;
+  const { plotLeft, plotRight, startX, domain } = timeRangeDrag;
+  const x = plotClientX(e, plotLeft, plotRight);
+  timeRangeDrag = null;
+  document.body.classList.remove('time-range-selecting');
+  if (timeRangeOverlayEl) { timeRangeOverlayEl.remove(); timeRangeOverlayEl = null; }
+  if (Math.abs(x - startX) < TIME_RANGE_DRAG_MIN_PX) return;
+
+  const plotSpan = plotRight - plotLeft;
+  const pxToTime = px => domain.domainStart +
+    ((px - plotLeft) / plotSpan) * (domain.domainEnd - domain.domainStart);
+  const startMs = pxToTime(Math.min(startX, x));
+  const endMs = pxToTime(Math.max(startX, x));
+
+  // Dragging out a range is a deliberate "freeze on this window" action --
+  // auto-refresh re-rendering over it every couple seconds while it's being
+  // examined would fight that intent, so selecting a range always pauses
+  // it (if it was running) rather than leaving it ticking in the
+  // background.
+  if (autoRefreshTimer) setAutoRefreshActive(false);
+
+  document.getElementById('time-mode').value = 'absolute';
+  setTimeMode('absolute');
+  document.getElementById('abs-start').value = toDatetimeLocal(new Date(startMs));
+  document.getElementById('abs-end').value = toDatetimeLocal(new Date(endMs));
+  loadData();
+});
+
 document.getElementById('modal-close').addEventListener('click', closeModal);
 document.getElementById('modal-backdrop').addEventListener('click', (e) => {
   if (e.target.id === 'modal-backdrop') { closeModal(); return; }
   const removeBtn = e.target.closest('.tag-pill button');
   if (removeBtn) { removeTag(removeBtn.dataset.tag); return; }
   if (e.target.id === 'connect-btn') toggleConnection();
+  if (e.target.id === 'export-csv-btn') exportDeviceCsv();
 });
 document.getElementById('modal-backdrop').addEventListener('keydown', (e) => {
   if (e.target.id === 'tag-input' && e.key === 'Enter') {
@@ -1967,21 +2427,22 @@ document.getElementById('modal-backdrop').addEventListener('keydown', (e) => {
     addTag(value).then(() => { e.target.value = ''; });
   }
 });
-document.getElementById('hamburger-btn').addEventListener('click', (e) => {
-  e.stopPropagation();
-  toggleSettingsMenu();
-});
-document.addEventListener('click', (e) => {
-  if (!document.getElementById('menu-wrap').contains(e.target)) toggleSettingsMenu(false);
-});
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { closeModal(); toggleSettingsMenu(false); }
+  if (e.key === 'Escape') { closeModal(); }
 });
 
 window.addEventListener('resize', () => {
-  if (viewMode === 'points' ? allPoints : allDots) applyFilter();
+  if (viewMode === 'points' ? allPoints : allDots) renderCurrent();
 });
 document.getElementById('refresh').addEventListener('click', loadData);
+document.getElementById('meta').addEventListener('click', (e) => {
+  const open = document.getElementById('stats-panel').classList.toggle('open');
+  e.currentTarget.setAttribute('aria-expanded', String(open));
+  // loadStats() itself only fetches while the drawer is open, and the last
+  // loadData() call may have run while it was still closed -- refresh right
+  // away on open instead of leaving it empty/stale until the next tick.
+  if (open) loadStats(currentQueryParams());
+});
 
 // Untoggled by default -- autoRefreshTimer stays null until the user clicks
 // the button, no init call needed to leave it off. play/pause icon swap and
@@ -2014,17 +2475,32 @@ document.getElementById('view-mode').addEventListener('change', (e) => {
   loadData();
 });
 document.getElementById('time-mode').addEventListener('change', (e) => setTimeMode(e.target.value));
-document.getElementById('filter-box').addEventListener('input', () => applyFilter());
-document.getElementById('filter-mode').addEventListener('change', () => applyFilter());
-document.getElementById('top-enabled').addEventListener('change', () => applyFilter());
-document.getElementById('top-n').addEventListener('input', () => applyFilter());
+
+// Filter/top-N controls now change what the server returns, not just what's
+// drawn from an already-fetched array, so they need a re-fetch (loadData)
+// rather than a re-render. The free-text box and the top-N number field
+// debounce so a fast typist/scroller doesn't fire one request per keystroke.
+const FILTER_DEBOUNCE_MS = 300;
+let filterDebounceTimer = null;
+function scheduleLoadData() {
+  clearTimeout(filterDebounceTimer);
+  filterDebounceTimer = setTimeout(loadData, FILTER_DEBOUNCE_MS);
+}
+document.getElementById('filter-box').addEventListener('input', scheduleLoadData);
+document.getElementById('filter-mode').addEventListener('change', loadData);
+document.getElementById('top-enabled').addEventListener('change', () => {
+  syncTopNEnabled();
+  loadData();
+});
+document.getElementById('top-n').addEventListener('input', scheduleLoadData);
 document.getElementById('graph-height').addEventListener('input', (e) => {
   const value = e.target.value.trim();
   customGraphHeight = value === '' ? null : Number(value);
-  if (viewMode === 'points' ? allPoints : allDots) applyFilter();
+  if (viewMode === 'points' ? allPoints : allDots) renderCurrent();
 });
 
 setTimeMode('relative');
+syncTopNEnabled();
 loadColumnConfig().then(loadData);
 pollGlobalConnectStatuses();
 setInterval(pollGlobalConnectStatuses, GLOBAL_CONNECT_POLL_MS);

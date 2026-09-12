@@ -277,6 +277,7 @@ def _seed_reference_tables_if_needed(conn):
     conn.execute('''
         CREATE TABLE IF NOT EXISTS manufacturerdata_names (
             manufacturerdata_id INTEGER PRIMARY KEY,
+            category_id          INTEGER REFERENCES categories(category_id) ON DELETE SET NULL,
             name                 TEXT NOT NULL,
             icon                 TEXT,
             color                TEXT CHECK (color IN ('RED','YELLOW','GREEN','PINK'))
@@ -311,18 +312,36 @@ def _seed_reference_tables_if_needed(conn):
         )
     ''')
     _ensure_uuid_lookup_icon_column(conn)
+    _ensure_manufacturerdata_category_column(conn)
     already_seeded = conn.execute('SELECT 1 FROM categories LIMIT 1').fetchone() is not None
     if already_seeded:
         return
     conn.execute('ATTACH DATABASE ? AS ref', (SETTINGS_BASELINE_DB_PATH,))
     try:
-        conn.execute('INSERT OR IGNORE INTO manufacturerdata_names SELECT * FROM ref.manufacturerdata_names')
+        if _attached_table_has_column(conn, 'ref', 'manufacturerdata_names', 'category_id'):
+            conn.execute(
+                'INSERT OR IGNORE INTO manufacturerdata_names '
+                '(manufacturerdata_id, category_id, name, icon, color) '
+                'SELECT manufacturerdata_id, category_id, name, icon, color FROM ref.manufacturerdata_names'
+            )
+        else:
+            conn.execute(
+                'INSERT OR IGNORE INTO manufacturerdata_names (manufacturerdata_id, name, icon, color) '
+                'SELECT manufacturerdata_id, name, icon, color FROM ref.manufacturerdata_names'
+            )
         conn.execute('INSERT OR IGNORE INTO categories SELECT * FROM ref.categories')
         conn.execute('INSERT OR IGNORE INTO ouids SELECT * FROM ref.ouids')
         conn.execute('INSERT OR IGNORE INTO uuid_lookups SELECT * FROM ref.uuid_lookups')
         conn.commit()
     finally:
         conn.execute('DETACH DATABASE ref')
+
+
+def _attached_table_has_column(conn, schema, table, column):
+    return any(
+        row[1] == column
+        for row in conn.execute(f'PRAGMA {schema}.table_info({table})').fetchall()
+    )
 
 
 def _ensure_uuid_lookup_icon_column(conn):
@@ -339,6 +358,25 @@ def _ensure_uuid_lookup_icon_column(conn):
             )
         ''')
         conn.commit()
+    finally:
+        conn.execute('DETACH DATABASE ref')
+
+
+def _ensure_manufacturerdata_category_column(conn):
+    existing_columns = {row[1] for row in conn.execute('PRAGMA table_info(manufacturerdata_names)').fetchall()}
+    if not existing_columns or 'category_id' in existing_columns:
+        return
+    conn.execute('ALTER TABLE manufacturerdata_names ADD COLUMN category_id INTEGER REFERENCES categories(category_id) ON DELETE SET NULL')
+    conn.execute('ATTACH DATABASE ? AS ref', (SETTINGS_BASELINE_DB_PATH,))
+    try:
+        if _attached_table_has_column(conn, 'ref', 'manufacturerdata_names', 'category_id'):
+            conn.execute('''
+                UPDATE manufacturerdata_names SET category_id = (
+                    SELECT r.category_id FROM ref.manufacturerdata_names AS r
+                    WHERE r.manufacturerdata_id = manufacturerdata_names.manufacturerdata_id
+                )
+            ''')
+            conn.commit()
     finally:
         conn.execute('DETACH DATABASE ref')
 
@@ -868,7 +906,6 @@ def properties_changed(interface, changed, invalidated, path=None):
 
 
 class _RejectAgent(dbus.service.Object):
-
     def _reject(self, method_name, device, message):
         address = address_from_path(device) or device
         print(f"[AgentRejected] {method_name} for {address}: {message}")

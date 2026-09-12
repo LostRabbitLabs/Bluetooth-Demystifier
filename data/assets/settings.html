@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Settings — Bluetooth Demystifier</title>
+<link rel="icon" type="image/png" href="/logo.png">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -241,6 +242,10 @@
     <div class="group-body">
       <p class="status-text">Choose which columns appear, their order, and their default width.</p>
       <ul class="column-list" id="column-list"></ul>
+      <div class="interface-row">
+        <label>Reset column order and widths to defaults</label>
+        <button type="button" id="reset-columns-btn">Reset</button>
+      </div>
       <p class="status-text" id="column-status"></p>
     </div>
   </div>
@@ -960,12 +965,23 @@ const COLUMN_LABELS = {
   mac: 'MAC Address',
   tags: 'Tags',
   service_data: 'Service Data',
+  type: 'Type',
 };
 // Mirrors app.py's MIN_COLUMN_WIDTH/MAX_COLUMN_WIDTH -- clamps the "Default
 // width" input client-side purely so it never rejects on save; the server
 // re-validates against those same bounds regardless.
 const MIN_COLUMN_WIDTH = 24;
 const MAX_COLUMN_WIDTH = 400;
+
+// Mirrors app.py's DEFAULT_COLUMN_ORDER/DEFAULT_HIDDEN_COLUMNS/
+// DEFAULT_COLUMN_WIDTHS -- what "Reset to defaults" below restores.
+const DEFAULT_COLUMN_ORDER = ['count', 'rssi', 'uuid', 'first_seen', 'last_seen', 'mac', 'type', 'tags', 'service_data'];
+const DEFAULT_HIDDEN_COLUMNS = new Set(['mac', 'service_data']);
+const DEFAULT_COLUMN_WIDTHS = {
+  count: 50, rssi: 50, uuid: 50,
+  first_seen: 110, last_seen: 110,
+  mac: 130, type: 65, tags: 160, service_data: 90,
+};
 
 // Mirrors the server's column_config rows, in display order -- mutated
 // locally on toggle/reorder/width edit, then the whole list is re-sent on
@@ -1056,6 +1072,16 @@ document.getElementById('column-list').addEventListener('change', (e) => {
   } else {
     return;
   }
+  saveColumns();
+});
+
+document.getElementById('reset-columns-btn').addEventListener('click', () => {
+  currentColumns = DEFAULT_COLUMN_ORDER.map(key => ({
+    key,
+    visible: !DEFAULT_HIDDEN_COLUMNS.has(key),
+    width: DEFAULT_COLUMN_WIDTHS[key],
+  }));
+  renderColumnList();
   saveColumns();
 });
 

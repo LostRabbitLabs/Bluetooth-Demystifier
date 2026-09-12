@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
+import bisect
+import csv
 import datetime
 import glob
+import io
 import os
 import re
 import signal
@@ -21,48 +24,36 @@ HISTORIES_DB_PATH = os.path.join(DB_DIR, 'bluetooth_histories.db')
 SETTINGS_BASELINE_DB_PATH = os.path.join(DB_DIR, 'baseline', 'settings_baseline.db')
 BLUEZ_MONITOR_PATH = os.path.join(SCRIPT_DIR, 'bluez_monitor.py')
 ASSETS_DIR = os.path.join(SCRIPT_DIR, 'data', 'assets')
-
 DEBUG_MODE = False
-
 MONITOR_STOP_TIMEOUT_SECONDS = 20
 MONITOR_FORCE_STOP_GRACE_SECONDS = 5
 MONITOR_POLL_INTERVAL_SECONDS = 0.2
-
 DEFAULT_INTERFACE = 'hci0'
 ALLOWED_INTERFACES = ('hci0', 'hci1')
-
 DEFAULT_SCAN_MODE = 'auto'
 ALLOWED_SCAN_MODES = ('bredr', 'le', 'auto')
-
 DEFAULT_AUTO_START = True
-
 DEFAULT_CONNECT_TIMEOUT_SECONDS = 3
 MIN_CONNECT_TIMEOUT_SECONDS = 3
 MAX_CONNECT_TIMEOUT_SECONDS = 300
-
 DEFAULT_AUTO_CONNECT_LATEST = False
-
 DEFAULT_AUTO_CONNECT_LATEST_INTERVAL_SECONDS = 3
 MIN_AUTO_CONNECT_LATEST_INTERVAL_SECONDS = 1
 MAX_AUTO_CONNECT_LATEST_INTERVAL_SECONDS = 300
-
 DEFAULT_PERIODIC_RESTART = True
-
 DEFAULT_PERIODIC_RESTART_INTERVAL_MINUTES = 60
 MIN_PERIODIC_RESTART_INTERVAL_MINUTES = 5
 MAX_PERIODIC_RESTART_INTERVAL_MINUTES = 1440
-
-DEFAULT_COLUMN_ORDER = ('count', 'rssi', 'uuid', 'first_seen', 'last_seen', 'mac', 'tags', 'service_data')
+DEFAULT_COLUMN_ORDER = ('count', 'rssi', 'uuid', 'first_seen', 'last_seen', 'mac', 'type', 'tags', 'service_data')
 DEFAULT_HIDDEN_COLUMNS = ('mac', 'service_data')
 ALLOWED_COLUMNS = set(DEFAULT_COLUMN_ORDER)
 DEFAULT_COLUMN_WIDTHS = {
     'count': 50, 'rssi': 50, 'uuid': 50,
     'first_seen': 110, 'last_seen': 110,
-    'mac': 130, 'tags': 160, 'service_data': 90,
+    'mac': 130, 'type': 65, 'tags': 160, 'service_data': 90,
 }
 MIN_COLUMN_WIDTH = 24
 MAX_COLUMN_WIDTH = 400
-
 DEFAULT_THEME_COLORS = {
     'bg': '#0b0f14',
     'surface': '#16202b',
@@ -75,7 +66,7 @@ DEFAULT_THEME_COLORS = {
 }
 ALLOWED_THEME_COLOR_KEYS = set(DEFAULT_THEME_COLORS)
 THEME_COLOR_HEX_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
-
+MAC_STYLE_ALIAS_RE = re.compile(r'^[0-9A-Fa-f]{2}(-[0-9A-Fa-f]{2}){5}$')
 app = Flask(__name__)
 
 
@@ -246,6 +237,7 @@ def _seed_reference_tables_if_needed(db):
     db.execute('''
         CREATE TABLE IF NOT EXISTS manufacturerdata_names (
             manufacturerdata_id INTEGER PRIMARY KEY,
+            category_id          INTEGER REFERENCES categories(category_id) ON DELETE SET NULL,
             name                 TEXT NOT NULL,
             icon                 TEXT,
             color                TEXT CHECK (color IN ('RED','YELLOW','GREEN','PINK'))
@@ -280,18 +272,39 @@ def _seed_reference_tables_if_needed(db):
         )
     ''')
     _ensure_uuid_lookup_icon_column(db)
+    _ensure_manufacturerdata_category_column(db)
     already_seeded = db.execute('SELECT 1 FROM categories LIMIT 1').fetchone() is not None
     if already_seeded:
         return
     db.execute('ATTACH DATABASE ? AS ref', (SETTINGS_BASELINE_DB_PATH,))
     try:
-        db.execute('INSERT OR IGNORE INTO manufacturerdata_names SELECT * FROM ref.manufacturerdata_names')
         db.execute('INSERT OR IGNORE INTO categories SELECT * FROM ref.categories')
+        if _attached_table_has_column(db, 'ref', 'manufacturerdata_names', 'category_id'):
+            db.execute(
+                'INSERT OR IGNORE INTO manufacturerdata_names '
+                '(manufacturerdata_id, category_id, name, icon, color) '
+                'SELECT manufacturerdata_id, category_id, name, icon, color FROM ref.manufacturerdata_names'
+            )
+        else:
+            db.execute(
+                'INSERT OR IGNORE INTO manufacturerdata_names (manufacturerdata_id, name, icon, color) '
+                'SELECT manufacturerdata_id, name, icon, color FROM ref.manufacturerdata_names'
+            )
         db.execute('INSERT OR IGNORE INTO ouids SELECT * FROM ref.ouids')
         db.execute('INSERT OR IGNORE INTO uuid_lookups SELECT * FROM ref.uuid_lookups')
         db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.execute('DETACH DATABASE ref')
+
+
+def _attached_table_has_column(conn, schema, table, column):
+    return any(
+        row[1] == column
+        for row in conn.execute(f'PRAGMA {schema}.table_info({table})').fetchall()
+    )
 
 
 def _ensure_uuid_lookup_icon_column(db):
@@ -308,6 +321,25 @@ def _ensure_uuid_lookup_icon_column(db):
             )
         ''')
         db.commit()
+    finally:
+        db.execute('DETACH DATABASE ref')
+
+
+def _ensure_manufacturerdata_category_column(db):
+    existing_columns = {row[1] for row in db.execute('PRAGMA table_info(manufacturerdata_names)').fetchall()}
+    if not existing_columns or 'category_id' in existing_columns:
+        return
+    db.execute('ALTER TABLE manufacturerdata_names ADD COLUMN category_id INTEGER REFERENCES categories(category_id) ON DELETE SET NULL')
+    db.execute('ATTACH DATABASE ? AS ref', (SETTINGS_BASELINE_DB_PATH,))
+    try:
+        if _attached_table_has_column(db, 'ref', 'manufacturerdata_names', 'category_id'):
+            db.execute('''
+                UPDATE manufacturerdata_names SET category_id = (
+                    SELECT r.category_id FROM ref.manufacturerdata_names AS r
+                    WHERE r.manufacturerdata_id = manufacturerdata_names.manufacturerdata_id
+                )
+            ''')
+            db.commit()
     finally:
         db.execute('DETACH DATABASE ref')
 
@@ -331,7 +363,6 @@ def _migrate_settings_schema_if_needed(db):
     if 'tags' in tables or 'device_tags' not in tables:
         _create_settings_schema(db)
         return
-
     old_rows = db.execute('SELECT address, tag, created_at FROM device_tags').fetchall()
     db.execute('ALTER TABLE device_tags RENAME TO device_tags_old')
     _create_settings_schema(db)
@@ -557,7 +588,7 @@ def _uuid_summaries_by_device(db, settings_db, query):
 DOTS_QUERY = '''
     SELECT
         d.device_id, d.address, d.alias, a.first_seen_at, a.last_seen_at, a.obs_count, a.rssi_last,
-        d.address_type, d.manufacturerdata_id, d.manufacturerdata_name, d.appearance
+        d.address_type, d.manufacturerdata_id, d.manufacturerdata_name, d.appearance, d.bearer
     FROM device_appearances a
     JOIN devices d ON d.device_id = a.device_id
     {where_clause}
@@ -567,7 +598,7 @@ DOTS_QUERY = '''
 POINTS_QUERY = '''
     SELECT
         d.device_id, d.address, d.alias, o.seen_at, o.rssi,
-        d.address_type, d.manufacturerdata_id, d.manufacturerdata_name, d.appearance
+        d.address_type, d.manufacturerdata_id, d.manufacturerdata_name, d.appearance, d.bearer
     FROM raw_observations o
     JOIN devices d ON d.device_id = o.device_id
     {where_clause}
@@ -605,6 +636,57 @@ def _service_data_bytes_by_address():
         if total:
             bytes_by_address[address] = bytes_by_address.get(address, 0) + total
     return bytes_by_address
+
+
+def _multi_alias_addresses():
+    if not os.path.exists(HISTORIES_DB_PATH):
+        return set()
+    histories_db = get_histories_db()
+    if not _histories_tables_exist(histories_db):
+        return set()
+    multi_device_ids = {
+        device_id for (device_id,) in histories_db.execute(
+            'SELECT device_id FROM device_alias_history GROUP BY device_id HAVING COUNT(DISTINCT alias) > 1'
+        ).fetchall()
+    }
+    if not multi_device_ids:
+        return set()
+    return {
+        address for device_id, address in get_db().execute('SELECT device_id, address FROM devices').fetchall()
+        if device_id in multi_device_ids
+    }
+
+
+def _display_alias_by_device():
+    if not os.path.exists(HISTORIES_DB_PATH):
+        return {}
+    histories_db = get_histories_db()
+    if not _histories_tables_exist(histories_db):
+        return {}
+    display_alias_by_device = {}
+    rows = histories_db.execute(
+        'SELECT device_id, alias FROM device_alias_history ORDER BY device_id, last_seen_at DESC'
+    ).fetchall()
+    for device_id, alias in rows:
+        if device_id in display_alias_by_device:
+            continue
+        if not MAC_STYLE_ALIAS_RE.match(alias or ''):
+            display_alias_by_device[device_id] = alias
+    return display_alias_by_device
+
+
+def _alias_search_text_by_device():
+    if not os.path.exists(HISTORIES_DB_PATH):
+        return {}
+    histories_db = get_histories_db()
+    if not _histories_tables_exist(histories_db):
+        return {}
+    text_by_device = {}
+    for device_id, alias in histories_db.execute(
+        'SELECT DISTINCT device_id, alias FROM device_alias_history'
+    ).fetchall():
+        text_by_device.setdefault(device_id, []).append(alias)
+    return {device_id: ' '.join(aliases) for device_id, aliases in text_by_device.items()}
 
 
 def _classifications_by_device(db, settings_db, device_ids, manufacturerdata_id_by_device):
@@ -648,22 +730,55 @@ def _classifications_by_device(db, settings_db, device_ids, manufacturerdata_id_
     referenced_manufacturerdata_ids = {mid for mid in manufacturerdata_id_by_device.values() if mid is not None}
     if referenced_manufacturerdata_ids:
         mid_placeholders = ','.join('?' * len(referenced_manufacturerdata_ids))
-        for manufacturerdata_id, name, icon, color in settings_db.execute(
-            f'SELECT manufacturerdata_id, name, icon, color FROM manufacturerdata_names '
-            f'WHERE manufacturerdata_id IN ({mid_placeholders}) AND icon IS NOT NULL',
+        manufacturer_rows = settings_db.execute(
+            f'SELECT manufacturerdata_id, name, icon, color, category_id FROM manufacturerdata_names '
+            f'WHERE manufacturerdata_id IN ({mid_placeholders})',
             list(referenced_manufacturerdata_ids),
-        ).fetchall():
-            manufacturer_by_id[manufacturerdata_id] = (name, icon, color)
+        ).fetchall()
+
+        needs_fallback = [r for r in manufacturer_rows if r[2] is None]
+        category_id_by_org_name = {}
+        if needs_fallback:
+            category_id_by_org_name = dict(settings_db.execute(
+                'SELECT org_name, category_id FROM ouids WHERE category_id IS NOT NULL'
+            ).fetchall())
+
+        extra_category_ids = {
+            r[4] for r in needs_fallback if r[4] is not None and r[4] not in categories_by_id
+        } | {
+            category_id_by_org_name[r[1]] for r in needs_fallback
+            if r[1] in category_id_by_org_name and category_id_by_org_name[r[1]] not in categories_by_id
+        }
+        if extra_category_ids:
+            extra_placeholders = ','.join('?' * len(extra_category_ids))
+            for category_id, name, icon, color, description in settings_db.execute(
+                f'SELECT category_id, name, icon, color, description FROM categories WHERE category_id IN ({extra_placeholders})',
+                list(extra_category_ids),
+            ).fetchall():
+                categories_by_id[category_id] = (name, icon, color, description)
+
+        for manufacturerdata_id, name, icon, color, category_id in manufacturer_rows:
+            if icon is None and category_id is not None:
+                category_info = categories_by_id.get(category_id)
+                if category_info is not None:
+                    _, icon, color, _ = category_info
+            if icon is None:
+                ouid_category_id = category_id_by_org_name.get(name)
+                category_info = categories_by_id.get(ouid_category_id) if ouid_category_id is not None else None
+                if category_info is not None:
+                    _, icon, color, _ = category_info
+            if icon is not None:
+                manufacturer_by_id[manufacturerdata_id] = (name, icon, color)
 
     uuid_matches = db.execute(
         f'''
-        SELECT device_id, uuid_lookup_id FROM (
-            SELECT ds.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id
+        SELECT device_id, uuid_lookup_id, uuid FROM (
+            SELECT ds.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id, s.uuid AS uuid
             FROM device_service_uuids ds
             JOIN service_uuids s ON s.uuid_id = ds.uuid_id
             WHERE ds.device_id IN ({id_placeholders})
             UNION
-            SELECT dsol.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id
+            SELECT dsol.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id, s.uuid AS uuid
             FROM device_solicited_uuids dsol
             JOIN service_uuids s ON s.uuid_id = dsol.uuid_id
             WHERE dsol.device_id IN ({id_placeholders})
@@ -673,7 +788,7 @@ def _classifications_by_device(db, settings_db, device_ids, manufacturerdata_id_
         device_ids + device_ids,
     ).fetchall()
     uuid_lookup_by_id = {}
-    referenced_uuid_lookup_ids = {uuid_lookup_id for _, uuid_lookup_id in uuid_matches}
+    referenced_uuid_lookup_ids = {uuid_lookup_id for _, uuid_lookup_id, _ in uuid_matches}
     if referenced_uuid_lookup_ids:
         uuid_placeholders = ','.join('?' * len(referenced_uuid_lookup_ids))
         for uuid_lookup_id, name, icon in settings_db.execute(
@@ -714,8 +829,9 @@ def _classifications_by_device(db, settings_db, device_ids, manufacturerdata_id_
             'oui': None, 'org_name': None, 'category_id': None,
             'category_name': name, 'category_icon': icon, 'category_color': color,
             'category_description': None, 'source': 'manufacturer',
+            'manufacturer_id': manufacturerdata_id,
         })
-    for device_id, uuid_lookup_id in uuid_matches:
+    for device_id, uuid_lookup_id, uuid in uuid_matches:
         entry = uuid_lookup_by_id.get(uuid_lookup_id)
         if entry is None:
             continue
@@ -723,7 +839,7 @@ def _classifications_by_device(db, settings_db, device_ids, manufacturerdata_id_
         rows_by_device[device_id].append({
             'oui': None, 'org_name': None, 'category_id': None,
             'category_name': name, 'category_icon': icon, 'category_color': None,
-            'category_description': None, 'source': 'uuid',
+            'category_description': None, 'source': 'uuid', 'uuid': uuid,
         })
     return rows_by_device
 
@@ -735,20 +851,51 @@ def _primary_category_color(rows):
     return best['category_color']
 
 
+_REGIONAL_INDICATOR_RANGE = range(0x1F1E6, 0x1F200)
+_EMOJI_VARIATION_SELECTORS = (0xFE0E, 0xFE0F)
+_EMOJI_SKIN_TONE_RANGE = range(0x1F3FB, 0x1F400)
+_ZERO_WIDTH_JOINER = 0x200D
+
+
+def _split_icon_glyphs(icon):
+    glyphs = []
+    cluster = ''
+    prev_cp = None
+    prev_is_regional_indicator = False
+    for ch in icon:
+        cp = ord(ch)
+        is_regional_indicator = cp in _REGIONAL_INDICATOR_RANGE
+        if not cluster:
+            cluster = ch
+        elif (prev_cp == _ZERO_WIDTH_JOINER or cp == _ZERO_WIDTH_JOINER
+              or cp in _EMOJI_VARIATION_SELECTORS or cp in _EMOJI_SKIN_TONE_RANGE
+              or (prev_is_regional_indicator and is_regional_indicator and len(cluster) == 1)):
+            cluster += ch
+        else:
+            glyphs.append(cluster)
+            cluster = ch
+        prev_cp = cp
+        prev_is_regional_indicator = is_regional_indicator
+    if cluster:
+        glyphs.append(cluster)
+    return glyphs
+
+
 def _icons_string(rows):
-    icon_category_ids = {}
+    glyph_category_ids = {}
     for r in rows:
         if r['category_icon']:
-            icon_category_ids.setdefault(r['category_icon'], []).append(r['category_id'])
-    if not icon_category_ids:
+            for glyph in _split_icon_glyphs(r['category_icon']):
+                glyph_category_ids.setdefault(glyph, []).append(r['category_id'])
+    if not glyph_category_ids:
         return None
 
-    def sort_key(icon):
-        category_ids = [c for c in icon_category_ids[icon] if c is not None]
+    def sort_key(glyph):
+        category_ids = [c for c in glyph_category_ids[glyph] if c is not None]
         manufacturer_only = not category_ids
         return (manufacturer_only, min(category_ids) if category_ids else 0)
 
-    return ','.join(sorted(icon_category_ids, key=sort_key))
+    return ','.join(sorted(glyph_category_ids, key=sort_key))
 
 
 def _distinct_concat(rows, key):
@@ -756,26 +903,218 @@ def _distinct_concat(rows, key):
     return ','.join(values) if values else None
 
 
-def _search_blob(address, alias, address_type, manufacturer, appearance, icons,
+def _manufacturer_id_hex(manufacturer_id):
+    return f'0x{manufacturer_id:04X}'
+
+
+def _build_search_fields(address, alias, alias_history_text, address_type, manufacturer,
+                          manufacturer_id_hex, manufacturerdata_id, oui, org_names,
+                          category_names, category_descriptions, color,
+                          service_uuids, service_uuid_names, solicited_uuids, solicited_uuid_names,
+                          service_data_text, tags, bearer):
+    manufacturer_id_text = ' '.join(str(p) for p in (
+        manufacturer_id_hex, manufacturerdata_id,
+    ) if p is not None) or None
+    return {
+        'mac_addr': address,
+        'alias': ' '.join(str(p) for p in (alias, alias_history_text) if p),
+        'mac_type': address_type,
+        'manufacturer_name': manufacturer,
+        'manufacturer_id': manufacturer_id_text,
+        'oui_id': oui,
+        'oui_name': org_names,
+        'category_names': category_names,
+        'category_description': category_descriptions,
+        'color': color,
+        'uuid': ' '.join(str(p) for p in (
+            service_uuids, service_uuid_names, solicited_uuids, solicited_uuid_names,
+        ) if p) or None,
+        'data': service_data_text,
+        'tags': ','.join(tags) if tags else None,
+        'bt_type': bearer,
+    }
+
+
+def _search_blob(address, alias, alias_history_text, address_type, manufacturer, appearance, icons,
                   org_names, category_names, category_descriptions,
                   service_uuids, service_uuid_names,
-                  solicited_uuids, solicited_uuid_names, service_data_text, tags):
+                  solicited_uuids, solicited_uuid_names, service_data_text, tags,
+                  manufacturer_id_hex):
     return ' '.join(str(p) for p in (
-        address, alias, address_type, manufacturer, appearance,
+        address, alias, alias_history_text, address_type, manufacturer, appearance,
         icons, org_names, category_names, category_descriptions,
         service_uuids, service_uuid_names,
         solicited_uuids, solicited_uuid_names,
-        service_data_text, ' '.join(tags),
+        service_data_text, ' '.join(tags), manufacturer_id_hex,
     ) if p is not None).lower()
 
 
-@app.route('/api/dots')
-def dots():
-    if not os.path.exists(DB_PATH):
-        return jsonify([])
+_FILTER_ESCAPED_SEP_RE = re.compile(r'\\([;+])')
+_FILTER_AND_SPLIT_RE = re.compile(r'(?<!\\)\+')
+_FILTER_OR_SPLIT_RE = re.compile(r'(?<!\\);')
+_FIELD_TERM_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_]*):"(.*)"$', re.DOTALL)
 
-    start = request.args.get('start')
-    end = request.args.get('end')
+
+FIELD_SEARCH_KEYS = {
+    'mac_addr', 'alias', 'mac_type', 'manufacturer_name', 'manufacturer_id',
+    'oui_id', 'oui_name', 'category_names', 'category_description', 'color',
+    'uuid', 'data', 'tags', 'bt_type',
+}
+ENUM_FIELD_KEYS = {'mac_type', 'color', 'bt_type'}
+
+
+def _unescape_filter_text(s):
+    return _FILTER_ESCAPED_SEP_RE.sub(r'\1', s)
+
+
+def _parse_filter_terms(raw):
+    groups = []
+    for and_group in _FILTER_AND_SPLIT_RE.split(raw):
+        alternatives = []
+        for alt in _FILTER_OR_SPLIT_RE.split(and_group):
+            unescaped = _unescape_filter_text(alt).strip()
+            field_match = _FIELD_TERM_RE.match(unescaped)
+            if field_match and field_match.group(1).lower() in FIELD_SEARCH_KEYS:
+                field_key = field_match.group(1).lower()
+                value = field_match.group(2).replace('\\"', '"').lower()
+                alternatives.append(('field', field_key, value))
+                continue
+            words = unescaped.lower().split()
+            if words:
+                alternatives.append(('words', words))
+        if alternatives:
+            groups.append(alternatives)
+    return groups
+
+
+def _field_text_matches(value, candidate):
+    if candidate is None:
+        return False
+    candidate = str(candidate).lower()
+    if value.endswith('*'):
+        prefix = value[:-1]
+        return any(seg.startswith(prefix) for seg in re.split(r'[,\s]+', candidate) if seg)
+    return value in candidate
+
+
+def _field_matches(field_key, value, fields):
+    candidate = fields.get(field_key)
+    if field_key in ENUM_FIELD_KEYS:
+        return candidate is not None and str(candidate).strip().lower() == value
+    return _field_text_matches(value, candidate)
+
+
+def _filter_matches(blob, fields, filter_groups, not_equals):
+    if not filter_groups:
+        return True
+
+    def alternative_matches(alt):
+        if alt[0] == 'field':
+            return _field_matches(alt[1], alt[2], fields)
+        return all(word in blob for word in alt[1])
+
+    is_match = all(
+        any(alternative_matches(alt) for alt in alternatives)
+        for alternatives in filter_groups
+    )
+    return not is_match if not_equals else is_match
+
+
+def _parse_query_filter():
+    filter_groups = _parse_filter_terms(request.args.get('q', ''))
+    not_equals = request.args.get('mode') == 'not-equals'
+    return filter_groups, not_equals
+
+
+def _parse_top_n():
+    raw = request.args.get('top')
+    if not raw:
+        return None
+    try:
+        top_n = int(raw)
+    except ValueError:
+        return None
+    return top_n if top_n >= 1 else None
+
+
+def _limit_to_top_addresses(rows, weight_of, top_n):
+    if top_n is None:
+        return rows
+    weights = {}
+    for row in rows:
+        weights[row['address']] = weights.get(row['address'], 0) + weight_of(row)
+    top_addresses = {
+        address for address, _ in
+        sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))[:top_n]
+    }
+    return [row for row in rows if row['address'] in top_addresses]
+
+
+ONE_DAY_SECONDS = 86400
+ONE_WEEK_SECONDS = 7 * ONE_DAY_SECONDS
+ONE_MONTH_SECONDS = 30 * ONE_DAY_SECONDS
+ONE_YEAR_SECONDS = 365 * ONE_DAY_SECONDS
+
+POINTS_BUCKET_TIERS = (
+    (ONE_WEEK_SECONDS, 5 * 60),
+    (ONE_MONTH_SECONDS, 15 * 60),
+    (ONE_YEAR_SECONDS, 3 * 3600),
+)
+
+
+POINTS_BUCKET_FALLBACK_SECONDS = ONE_DAY_SECONDS
+
+
+def _parse_iso(value):
+    if not value:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except (TypeError, ValueError):
+        return None
+
+
+def _window_span_seconds(start, end):
+    start_dt = _parse_iso(start)
+    if start_dt is None:
+        return None
+    end_dt = _parse_iso(end) or datetime.datetime.now(datetime.timezone.utc)
+    try:
+        return (end_dt - start_dt).total_seconds()
+    except TypeError:
+        return None
+
+
+def _points_bucket_width_seconds(start, end):
+    span_seconds = _window_span_seconds(start, end)
+    if span_seconds is not None and span_seconds <= ONE_DAY_SECONDS:
+        return None
+    if span_seconds is None:
+        return POINTS_BUCKET_FALLBACK_SECONDS
+    for upper_bound_seconds, width_seconds in POINTS_BUCKET_TIERS:
+        if span_seconds <= upper_bound_seconds:
+            return width_seconds
+    return POINTS_BUCKET_FALLBACK_SECONDS
+
+
+def _downsample_points(rows, bucket_width_seconds):
+    latest_by_bucket = {}
+    order = []
+    for row in rows:
+        seen_dt = _parse_iso(row['seen_at'])
+
+        bucket_index = int(seen_dt.timestamp() // bucket_width_seconds) if seen_dt else row['seen_at']
+        key = (row['address'], bucket_index)
+        existing = latest_by_bucket.get(key)
+        if existing is None:
+            order.append(key)
+            latest_by_bucket[key] = row
+        elif row['seen_at'] > existing['seen_at']:
+            latest_by_bucket[key] = row
+    return [latest_by_bucket[key] for key in order]
+
+
+def _filtered_dots_rows(start, end, filter_groups, not_equals):
     conditions = []
     params = []
     if start:
@@ -789,6 +1128,9 @@ def dots():
 
     tags_by_address = _tags_by_address()
     service_data_bytes_by_address = _service_data_bytes_by_address()
+    multi_alias_addresses = _multi_alias_addresses()
+    display_alias_by_device = _display_alias_by_device()
+    alias_search_text_by_device = _alias_search_text_by_device()
     db = get_db()
     settings_db = get_settings_db()
     rows = db.execute(query, params).fetchall()
@@ -800,8 +1142,10 @@ def dots():
     solicited_uuid_summary_by_device = _uuid_summaries_by_device(db, settings_db, DEVICE_SOLICITED_UUIDS_ALL_QUERY)
     service_data_search_text_by_device = _service_data_search_text_by_device(db)
     result = []
+    device_id_by_address = {}
     for (device_id, address, alias, start_at, end_at, obs_count, rssi_last, address_type,
-         manufacturerdata_id, manufacturer, appearance) in rows:
+         manufacturerdata_id, manufacturer, appearance, bearer) in rows:
+        alias = display_alias_by_device.get(device_id, alias)
         tags = tags_by_address.get(address, [])
         classification_rows = classifications_by_device.get(device_id, [])
         icons = _icons_string(classification_rows)
@@ -809,10 +1153,30 @@ def dots():
         org_names = _distinct_concat(classification_rows, 'org_name')
         category_names = _distinct_concat(classification_rows, 'category_name')
         category_descriptions = _distinct_concat(classification_rows, 'category_description')
+        oui = _distinct_concat(classification_rows, 'oui')
         service_uuids, service_uuid_names, uuid_count = service_uuid_summary_by_device.get(
             device_id, (None, None, 0))
         solicited_uuids, solicited_uuid_names, _ = solicited_uuid_summary_by_device.get(
             device_id, (None, None, 0))
+        manufacturer_id_hex = _manufacturer_id_hex(manufacturerdata_id) if manufacturerdata_id is not None else None
+        service_data_text = service_data_search_text_by_device.get(device_id)
+        blob = _search_blob(
+            address, alias, alias_search_text_by_device.get(device_id), address_type, manufacturer, appearance,
+            icons, org_names, category_names, category_descriptions,
+            service_uuids, service_uuid_names,
+            solicited_uuids, solicited_uuid_names,
+            service_data_text, tags, manufacturer_id_hex,
+        )
+        fields = _build_search_fields(
+            address, alias, alias_search_text_by_device.get(device_id), address_type, manufacturer,
+            manufacturer_id_hex, manufacturerdata_id, oui, org_names,
+            category_names, category_descriptions, color,
+            service_uuids, service_uuid_names, solicited_uuids, solicited_uuid_names,
+            service_data_text, tags, bearer,
+        )
+        if not _filter_matches(blob, fields, filter_groups, not_equals):
+            continue
+        device_id_by_address[address] = device_id
         result.append({
             'address': address,
             'alias': alias,
@@ -825,15 +1189,115 @@ def dots():
             'color': color,
             'tags': tags,
             'service_data_bytes': service_data_bytes_by_address.get(address, 0),
-            'search': _search_blob(
-                address, alias, address_type, manufacturer, appearance, icons,
-                org_names, category_names, category_descriptions,
-                service_uuids, service_uuid_names,
-                solicited_uuids, solicited_uuid_names,
-                service_data_search_text_by_device.get(device_id), tags,
-            ),
+            'bearer': bearer,
+            'multi_alias': address in multi_alias_addresses,
         })
+    return result, device_id_by_address, classifications_by_device, manufacturerdata_id_by_device
+
+
+@app.route('/api/dots')
+def dots():
+    if not os.path.exists(DB_PATH):
+        return jsonify([])
+
+    start = request.args.get('start')
+    end = request.args.get('end')
+    filter_groups, not_equals = _parse_query_filter()
+    top_n = _parse_top_n()
+
+    result, _, _, _ = _filtered_dots_rows(start, end, filter_groups, not_equals)
+    result = _limit_to_top_addresses(result, lambda row: row['obs_count'] or 0, top_n)
     return jsonify(result)
+
+
+def _sorted_stat_entries(counts):
+    return [
+        {'label': label, 'filter': filter_value, 'icon': icon, 'color': color, 'count': count}
+        for (label, filter_value, icon, color), count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0][0]))
+    ]
+
+
+@app.route('/api/stats')
+def device_stats():
+    empty = {'oui': [], 'manufacturer': [], 'alias': [], 'uuid': []}
+    if not os.path.exists(DB_PATH):
+        return jsonify(empty)
+
+    start = request.args.get('start')
+    end = request.args.get('end')
+    filter_groups, not_equals = _parse_query_filter()
+    top_n = _parse_top_n()
+
+    result, device_id_by_address, classifications_by_device, manufacturerdata_id_by_device = (
+        _filtered_dots_rows(start, end, filter_groups, not_equals)
+    )
+    result = _limit_to_top_addresses(result, lambda row: row['obs_count'] or 0, top_n)
+    shown_addresses = {row['address'] for row in result}
+    shown_device_ids = {
+        device_id_by_address[address] for address in shown_addresses if address in device_id_by_address
+    }
+
+    oui_counts = {}
+    uuid_counts = {}
+    alias_icon_color_by_device = {}
+    for device_id in shown_device_ids:
+        for c in classifications_by_device.get(device_id, []):
+            if c['source'] == 'ouid' and c['org_name']:
+                key = (c['org_name'], c['org_name'], c['category_icon'], c['category_color'])
+                oui_counts[key] = oui_counts.get(key, 0) + 1
+            elif c['source'] == 'uuid' and c.get('uuid'):
+                label = f"{c['uuid']} - {c['category_name']}" if c['category_name'] else c['uuid']
+                key = (label, c['uuid'], c['category_icon'], c['category_color'])
+                uuid_counts[key] = uuid_counts.get(key, 0) + 1
+            elif c['source'] == 'alias' and c['category_icon'] and device_id not in alias_icon_color_by_device:
+                alias_icon_color_by_device[device_id] = (c['category_icon'], c['category_color'])
+
+    settings_db = get_settings_db()
+    referenced_mfr_ids = {
+        manufacturerdata_id_by_device[device_id] for device_id in shown_device_ids
+        if manufacturerdata_id_by_device.get(device_id) is not None
+    }
+    manufacturer_names_by_id = {}
+    if referenced_mfr_ids:
+        placeholders = ','.join('?' * len(referenced_mfr_ids))
+        manufacturer_names_by_id = dict(settings_db.execute(
+            f'SELECT manufacturerdata_id, name FROM manufacturerdata_names WHERE manufacturerdata_id IN ({placeholders})',
+            list(referenced_mfr_ids),
+        ).fetchall())
+    manufacturer_icon_color_by_id = {}
+    for device_id in shown_device_ids:
+        for c in classifications_by_device.get(device_id, []):
+            if c['source'] == 'manufacturer' and c.get('manufacturer_id') is not None:
+                manufacturer_icon_color_by_id[c['manufacturer_id']] = (c['category_icon'], c['category_color'])
+
+    mfr_counts = {}
+    for device_id in shown_device_ids:
+        manufacturer_id = manufacturerdata_id_by_device.get(device_id)
+        if manufacturer_id is None:
+            continue
+        manufacturer_id_hex = _manufacturer_id_hex(manufacturer_id)
+        name = manufacturer_names_by_id.get(manufacturer_id)
+        icon, color = manufacturer_icon_color_by_id.get(manufacturer_id, (None, None))
+
+        filter_value = name if name is not None else manufacturer_id_hex
+        key = (f'{name or "Unknown"} ({manufacturer_id_hex})', filter_value, icon, color)
+        mfr_counts[key] = mfr_counts.get(key, 0) + 1
+
+    alias_counts = {}
+    for row in result:
+        alias = row['alias']
+        if not alias or MAC_STYLE_ALIAS_RE.match(alias):
+            continue
+        icon, color = alias_icon_color_by_device.get(device_id_by_address.get(row['address']), (None, None))
+        key = (alias, alias, icon, color)
+        alias_counts[key] = alias_counts.get(key, 0) + 1
+
+    return jsonify({
+        'oui': _sorted_stat_entries(oui_counts),
+        'manufacturer': _sorted_stat_entries(mfr_counts),
+        'alias': _sorted_stat_entries(alias_counts),
+        'uuid': _sorted_stat_entries(uuid_counts),
+    })
 
 
 @app.route('/api/points')
@@ -854,8 +1318,15 @@ def points():
     where_clause = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
     query = POINTS_QUERY.format(where_clause=where_clause)
 
+    filter_groups, not_equals = _parse_query_filter()
+    top_n = _parse_top_n()
+    bucket_width_seconds = _points_bucket_width_seconds(start, end)
+
     tags_by_address = _tags_by_address()
     service_data_bytes_by_address = _service_data_bytes_by_address()
+    multi_alias_addresses = _multi_alias_addresses()
+    display_alias_by_device = _display_alias_by_device()
+    alias_search_text_by_device = _alias_search_text_by_device()
     db = get_db()
     settings_db = get_settings_db()
     rows = db.execute(query, params).fetchall()
@@ -868,7 +1339,8 @@ def points():
     service_data_search_text_by_device = _service_data_search_text_by_device(db)
     result = []
     for (device_id, address, alias, seen_at, rssi, address_type,
-         manufacturerdata_id, manufacturer, appearance) in rows:
+         manufacturerdata_id, manufacturer, appearance, bearer) in rows:
+        alias = display_alias_by_device.get(device_id, alias)
         tags = tags_by_address.get(address, [])
         classification_rows = classifications_by_device.get(device_id, [])
         icons = _icons_string(classification_rows)
@@ -876,10 +1348,29 @@ def points():
         org_names = _distinct_concat(classification_rows, 'org_name')
         category_names = _distinct_concat(classification_rows, 'category_name')
         category_descriptions = _distinct_concat(classification_rows, 'category_description')
+        oui = _distinct_concat(classification_rows, 'oui')
         service_uuids, service_uuid_names, uuid_count = service_uuid_summary_by_device.get(
             device_id, (None, None, 0))
         solicited_uuids, solicited_uuid_names, _ = solicited_uuid_summary_by_device.get(
             device_id, (None, None, 0))
+        manufacturer_id_hex = _manufacturer_id_hex(manufacturerdata_id) if manufacturerdata_id is not None else None
+        service_data_text = service_data_search_text_by_device.get(device_id)
+        blob = _search_blob(
+            address, alias, alias_search_text_by_device.get(device_id), address_type, manufacturer, appearance,
+            icons, org_names, category_names, category_descriptions,
+            service_uuids, service_uuid_names,
+            solicited_uuids, solicited_uuid_names,
+            service_data_text, tags, manufacturer_id_hex,
+        )
+        fields = _build_search_fields(
+            address, alias, alias_search_text_by_device.get(device_id), address_type, manufacturer,
+            manufacturer_id_hex, manufacturerdata_id, oui, org_names,
+            category_names, category_descriptions, color,
+            service_uuids, service_uuid_names, solicited_uuids, solicited_uuid_names,
+            service_data_text, tags, bearer,
+        )
+        if not _filter_matches(blob, fields, filter_groups, not_equals):
+            continue
         result.append({
             'address': address,
             'alias': alias,
@@ -890,14 +1381,12 @@ def points():
             'color': color,
             'tags': tags,
             'service_data_bytes': service_data_bytes_by_address.get(address, 0),
-            'search': _search_blob(
-                address, alias, address_type, manufacturer, appearance, icons,
-                org_names, category_names, category_descriptions,
-                service_uuids, service_uuid_names,
-                solicited_uuids, solicited_uuid_names,
-                service_data_search_text_by_device.get(device_id), tags,
-            ),
+            'bearer': bearer,
+            'multi_alias': address in multi_alias_addresses,
         })
+    result = _limit_to_top_addresses(result, lambda row: 1, top_n)
+    if bucket_width_seconds is not None:
+        result = _downsample_points(result, bucket_width_seconds)
     return jsonify(result)
 
 
@@ -910,12 +1399,13 @@ DEVICE_QUERY = '''
     LIMIT 1
 '''
 
+ALIAS_HISTORY_LIMIT = 20
 ALIAS_HISTORY_QUERY = '''
-    SELECT alias, MIN(first_seen_at) AS first_seen_at
+    SELECT alias, first_seen_at, last_seen_at
     FROM device_alias_history
     WHERE device_id = ?
-    GROUP BY alias
     ORDER BY first_seen_at DESC
+    LIMIT ?
 '''
 
 RSSI_HISTORY_LIMIT = 10
@@ -1024,7 +1514,7 @@ def device_detail(address):
 
     if os.path.exists(HISTORIES_DB_PATH) and _histories_tables_exist(get_histories_db()):
         histories_db = get_histories_db()
-        alias_history_rows = histories_db.execute(ALIAS_HISTORY_QUERY, (device_id,)).fetchall()
+        alias_history_rows = histories_db.execute(ALIAS_HISTORY_QUERY, (device_id, ALIAS_HISTORY_LIMIT)).fetchall()
         service_data_history_rows = histories_db.execute(SERVICE_DATA_HISTORY_QUERY, (device_id,)).fetchall()
     else:
         alias_history_rows = []
@@ -1057,12 +1547,13 @@ def device_detail(address):
         'tags': [row[0] for row in get_settings_db().execute(DEVICE_TAGS_QUERY, (address,)).fetchall()],
         'classifications': [
             {'oui': r['oui'], 'org_name': r['org_name'], 'category_name': r['category_name'],
-             'icon': r['category_icon'], 'color': r['category_color'], 'source': r['source']}
+             'icon': r['category_icon'], 'color': r['category_color'], 'source': r['source'],
+             'uuid': r.get('uuid'), 'manufacturer_id': r.get('manufacturer_id')}
             for r in classification_rows
         ],
         'alias_history': [
-            {'alias': alias, 'first_seen_at': first_seen_at}
-            for alias, first_seen_at in alias_history_rows
+            {'alias': alias, 'first_seen_at': first_seen_at, 'last_seen_at': last_seen_at}
+            for alias, first_seen_at, last_seen_at in alias_history_rows
         ],
         'rssi_history': [
             {'seen_at': seen_at, 'rssi': rssi}
@@ -1090,6 +1581,196 @@ def device_detail(address):
             for uuid_id, data_hex, seen_at in service_data_history_rows
         ],
     })
+
+
+SERVICE_UUID_TIMELINE_QUERY = '''
+    SELECT s.uuid, s.uuid_lookup_id, ds.first_seen_at
+    FROM device_service_uuids ds
+    JOIN service_uuids s ON s.uuid_id = ds.uuid_id
+    WHERE ds.device_id = ?
+'''
+SOLICITED_UUID_TIMELINE_QUERY = '''
+    SELECT s.uuid, s.uuid_lookup_id, dsol.first_seen_at
+    FROM device_solicited_uuids dsol
+    JOIN service_uuids s ON s.uuid_id = dsol.uuid_id
+    WHERE dsol.device_id = ?
+'''
+ALIAS_TIMELINE_QUERY = '''
+    SELECT first_seen_at, alias
+    FROM device_alias_history
+    WHERE device_id = ?
+    ORDER BY first_seen_at
+'''
+MANUFACTURERDATA_TIMELINE_QUERY = '''
+    SELECT first_seen_at, manufacturerdata_id
+    FROM device_manufacturerdata_history
+    WHERE device_id = ?
+    ORDER BY first_seen_at
+'''
+SERVICE_DATA_TIMELINE_QUERY = '''
+    SELECT seen_at, uuid_id, data_hex
+    FROM device_service_data_history
+    WHERE device_id = ?
+    ORDER BY seen_at
+'''
+EXPORT_SESSIONS_QUERY = '''
+    SELECT session_id, first_seen_at, last_seen_at
+    FROM device_appearances
+    WHERE device_id = ?
+'''
+EXPORT_OBSERVATIONS_QUERY = '''
+    SELECT session_id, seen_at, rssi
+    FROM raw_observations
+    WHERE device_id = ?
+    ORDER BY seen_at
+'''
+
+
+def _latest_as_of(starts, values, seen_at):
+    idx = bisect.bisect_right(starts, seen_at) - 1
+    return values[idx] if idx >= 0 else None
+
+
+def _csv_cell(value):
+    return str(value) if value not in (None, '') else '--'
+
+
+@app.route('/api/device/<address>/export.csv')
+def device_export_csv(address):
+    if not os.path.exists(DB_PATH):
+        return jsonify({'error': 'not found'}), 404
+
+    db = get_db()
+    settings_db = get_settings_db()
+    row = db.execute(DEVICE_QUERY, (address,)).fetchone()
+    if row is None:
+        return jsonify({'error': 'not found'}), 404
+
+    device_id, address, _, _, _, _, _, bearer, _, _ = row
+
+    oui_key = address.replace(':', '').upper()[:6]
+    oui_display = ':'.join(address.split(':')[:3]).upper()
+    oui_org_row = settings_db.execute('SELECT org_name FROM ouids WHERE oui = ? LIMIT 1', (oui_key,)).fetchone()
+    oui_label = f'{oui_org_row[0]} ({oui_display})' if oui_org_row else f'Unknown ({oui_display})'
+
+    observations = db.execute(EXPORT_OBSERVATIONS_QUERY, (device_id,)).fetchall()
+
+    sessions = db.execute(EXPORT_SESSIONS_QUERY, (device_id,)).fetchall()
+    session_window = {session_id: (start, end) for session_id, start, end in sessions}
+
+    uuid_timeline = sorted(
+        db.execute(SERVICE_UUID_TIMELINE_QUERY, (device_id,)).fetchall() +
+        db.execute(SOLICITED_UUID_TIMELINE_QUERY, (device_id,)).fetchall(),
+        key=lambda r: r[2],
+    )
+    uuid_starts = [r[2] for r in uuid_timeline]
+    uuid_raw_values = [r[0] for r in uuid_timeline]
+
+    uuid_names_and_types = _uuid_lookup_names_and_types(
+        settings_db, {r[1] for r in uuid_timeline if r[1] is not None},
+    )
+    uuid_display_values = []
+    for uuid, uuid_lookup_id, _ in uuid_timeline:
+        entry = uuid_names_and_types.get(uuid_lookup_id)
+        uuid_display_values.append(f'{uuid} — {entry[0]} ({entry[1]})' if entry else uuid)
+
+    if os.path.exists(HISTORIES_DB_PATH) and _histories_tables_exist(get_histories_db()):
+        histories_db = get_histories_db()
+        alias_timeline = histories_db.execute(ALIAS_TIMELINE_QUERY, (device_id,)).fetchall()
+        mfr_timeline = histories_db.execute(MANUFACTURERDATA_TIMELINE_QUERY, (device_id,)).fetchall()
+        service_data_rows = histories_db.execute(SERVICE_DATA_TIMELINE_QUERY, (device_id,)).fetchall()
+    else:
+        alias_timeline, mfr_timeline, service_data_rows = [], [], []
+
+    alias_starts = [r[0] for r in alias_timeline]
+    alias_values = [r[1] for r in alias_timeline]
+    mfr_starts = [r[0] for r in mfr_timeline]
+    mfr_values = [r[1] for r in mfr_timeline]
+
+    referenced_mfr_ids = {v for v in mfr_values if v is not None}
+    manufacturer_names_by_id = {}
+    if referenced_mfr_ids:
+        placeholders = ','.join('?' * len(referenced_mfr_ids))
+        manufacturer_names_by_id = dict(settings_db.execute(
+            f'SELECT manufacturerdata_id, name FROM manufacturerdata_names WHERE manufacturerdata_id IN ({placeholders})',
+            list(referenced_mfr_ids),
+        ).fetchall())
+
+    def _format_manufacturer(manufacturer_id):
+        if manufacturer_id is None:
+            return None
+        name = manufacturer_names_by_id.get(manufacturer_id, 'Unknown')
+        return f'{name} ({manufacturer_id})'
+
+    service_data_seen_ats = [r[0] for r in service_data_rows]
+    referenced_uuid_ids = {uuid_id for _, uuid_id, _ in service_data_rows}
+    uuid_text_by_id = {}
+    if referenced_uuid_ids:
+        placeholders = ','.join('?' * len(referenced_uuid_ids))
+        uuid_text_by_id = dict(db.execute(
+            f'SELECT uuid_id, uuid FROM service_uuids WHERE uuid_id IN ({placeholders})',
+            list(referenced_uuid_ids),
+        ).fetchall())
+
+    service_data_by_session_uuid = {}
+    service_data_decoded_by_session_uuid = {}
+    for session_id, (start, end) in session_window.items():
+        lo = bisect.bisect_left(service_data_seen_ats, start)
+        hi = bisect.bisect_right(service_data_seen_ats, end)
+        seen_by_uuid, decoded_seen_by_uuid = {}, {}
+        for _, uuid_id, data_hex in service_data_rows[lo:hi]:
+            uuid = uuid_text_by_id.get(uuid_id, uuid_id)
+            seen, parts = seen_by_uuid.setdefault(uuid, (set(), []))
+            if data_hex not in seen:
+                seen.add(data_hex)
+                parts.append(data_hex)
+            decoded = _decode_service_data_text(uuid, data_hex)
+            if decoded:
+                dseen, dparts = decoded_seen_by_uuid.setdefault(uuid, (set(), []))
+                if decoded not in dseen:
+                    dseen.add(decoded)
+                    dparts.append(decoded)
+        for uuid, (_, parts) in seen_by_uuid.items():
+            service_data_by_session_uuid[(session_id, uuid)] = ','.join(parts)
+        for uuid, (_, dparts) in decoded_seen_by_uuid.items():
+            service_data_decoded_by_session_uuid[(session_id, uuid)] = ','.join(dparts)
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([
+        'mac_address', 'seen_at', 'aliases', 'rssi', 'bearer', 'oui',
+        'manufacturer_id', 'uuid', 'service_data', 'service_data_decoded',
+    ])
+
+    last_known_rssi = None
+    for session_id, seen_at, rssi in observations:
+        if rssi is not None:
+            last_known_rssi = rssi
+        else:
+            rssi = last_known_rssi
+        alias = _latest_as_of(alias_starts, alias_values, seen_at)
+        manufacturer_id = _latest_as_of(mfr_starts, mfr_values, seen_at)
+        common = [address, seen_at, alias, rssi, bearer, oui_label, _format_manufacturer(manufacturer_id)]
+
+        known_count = bisect.bisect_right(uuid_starts, seen_at)
+        if known_count == 0:
+            writer.writerow([_csv_cell(v) for v in [*common, None, None, None]])
+            continue
+        for i in range(known_count):
+            uuid = uuid_raw_values[i]
+            writer.writerow([_csv_cell(v) for v in [
+                *common, uuid_display_values[i],
+                service_data_by_session_uuid.get((session_id, uuid)),
+                service_data_decoded_by_session_uuid.get((session_id, uuid)),
+            ]])
+
+    filename = f"{address.replace(':', '-')}_export.csv"
+
+    return Response(
+        buf.getvalue().encode('utf-8-sig'),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
 
 
 def _get_device_connect_status(connections_db, address):
