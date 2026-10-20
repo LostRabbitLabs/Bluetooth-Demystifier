@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import argparse
 import datetime
+import glob
+import itertools
 import logging
 import os
 import queue
@@ -44,6 +46,128 @@ DB_PATH = os.path.join(DB_DIR, 'bluetooth.db')
 ERROR_LOG_PATH = os.path.join(DATA_DIR, 'errors.log')
 SETTINGS_DB_PATH = os.path.join(DB_DIR, 'settings.db')
 HISTORIES_DB_PATH = os.path.join(DB_DIR, 'bluetooth_histories.db')
+
+RAW_DIR = os.path.join(DB_DIR, 'raw')
+SVC_DIR = os.path.join(DB_DIR, 'svc')
+
+
+def _date_of(ts):
+    if isinstance(ts, datetime.date):
+        return ts
+    return datetime.date.fromisoformat(ts[:10])
+
+
+def _week_start(d):
+    d = _date_of(d)
+    return d - datetime.timedelta(days=d.weekday())
+
+
+def _days_in_range(start, end):
+    d0, d1 = _date_of(start), _date_of(end)
+    if d1 < d0:
+        return []
+    out, cur = [], d0
+    while cur <= d1:
+        out.append(cur)
+        cur += datetime.timedelta(days=1)
+    return out
+
+
+class _Partitions:
+    def __init__(self, directory, file_prefix, table_prefix, create_body, insert_cols):
+        self.dir = directory
+        self.file_prefix = file_prefix
+        self.table_prefix = table_prefix
+        self.create_body = create_body
+        self.insert_cols = insert_cols
+        self.file_re = re.compile(r'^' + file_prefix + r'_(\d{2})-(\d{2})-(\d{4})\.db$')
+        self.table_re = re.compile(r'^' + table_prefix + r'_\d{4}_\d{2}_\d{2}$')
+        self._writers = {}
+
+    def file_name_for(self, d):
+        return '%s_%s.db' % (self.file_prefix, _week_start(d).strftime('%d-%m-%Y'))
+
+    def file_path_for(self, d):
+        return os.path.join(self.dir, self.file_name_for(d))
+
+    def day_table_for(self, d):
+        return '%s_%s' % (self.table_prefix, _date_of(d).strftime('%Y_%m_%d'))
+
+    def _parse_file_date(self, path):
+        m = self.file_re.match(os.path.basename(path))
+        if not m:
+            return None
+        day, month, year = (int(g) for g in m.groups())
+        try:
+            return datetime.date(year, month, day)
+        except ValueError:
+            return None
+
+    def all_files(self):
+        paths = glob.glob(os.path.join(self.dir, '%s_*.db' % self.file_prefix))
+        dated = [(d, p) for p in paths for d in (self._parse_file_date(p),) if d is not None]
+        return [p for _, p in sorted(dated)]
+
+    def files_for_window(self, start, end):
+        if not start or not end:
+            return self.all_files()
+        wanted = {_week_start(d) for d in _days_in_range(start, end)}
+        return [p for p in self.all_files() if self._parse_file_date(p) in wanted]
+
+    def ensure_table(self, conn, table):
+        conn.execute('CREATE TABLE IF NOT EXISTS "%s" (%s)' % (table, self.create_body))
+        conn.execute('CREATE INDEX IF NOT EXISTS "idx_%s_seen" ON "%s"(seen_at)' % (table, table))
+        conn.execute('CREATE INDEX IF NOT EXISTS "idx_%s_dev_seen" ON "%s"(device_id, seen_at)' % (table, table))
+
+    def writer_conn(self, path):
+        conn = self._writers.get(path)
+        if conn is None:
+            os.makedirs(self.dir, exist_ok=True)
+            conn = sqlite3.connect(path, isolation_level=None, timeout=30)
+            conn.execute('PRAGMA journal_mode = WAL')
+            conn.execute('PRAGMA synchronous = NORMAL')
+            self._writers[path] = conn
+        return conn
+
+    def insert(self, seen_at, values):
+        d = _date_of(seen_at)
+        conn = self.writer_conn(self.file_path_for(d))
+        table = self.day_table_for(d)
+        self.ensure_table(conn, table)
+        cols = ', '.join('"%s"' % c for c in self.insert_cols)
+        qs = ', '.join('?' * len(self.insert_cols))
+        conn.execute('INSERT INTO "%s" (%s) VALUES (%s)' % (table, cols, qs), values)
+
+    def close_writers(self):
+        for conn in self._writers.values():
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        self._writers.clear()
+
+
+_RAW = _Partitions(
+    RAW_DIR, 'raw', 'raw_obs',
+    'obs_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, '
+    'device_id TEXT NOT NULL, seen_at TEXT NOT NULL, rssi INTEGER',
+    ('session_id', 'device_id', 'seen_at', 'rssi'),
+)
+_SVC = _Partitions(
+    SVC_DIR, 'svc', 'svc_data',
+    'row_id INTEGER PRIMARY KEY, device_id TEXT NOT NULL, uuid_id INTEGER NOT NULL, '
+    'data_hex TEXT NOT NULL, seen_at TEXT NOT NULL',
+    ('device_id', 'uuid_id', 'data_hex', 'seen_at'),
+)
+
+
+def insert_observation(session_id, device_id, seen_at, rssi):
+    _RAW.insert(seen_at, (session_id, device_id, seen_at, rssi))
+
+
+def insert_service_data(device_id, uuid_id, data_hex, seen_at):
+    _SVC.insert(seen_at, (device_id, uuid_id, data_hex, seen_at))
+
 
 logger = logging.getLogger('bluez_monitor')
 logger.setLevel(logging.ERROR)
@@ -411,6 +535,9 @@ def init_db():
     db = sqlite3.connect(DB_PATH)
     db.execute('PRAGMA journal_mode = WAL')
     db.execute('PRAGMA foreign_keys = ON')
+    db.execute('CREATE INDEX IF NOT EXISTS idx_sessions_last_seen '
+               'ON device_appearances(last_seen_at)')
+    db.commit()
     _load_reference_data()
 
 
@@ -461,6 +588,13 @@ def init_histories_db():
         'CREATE INDEX IF NOT EXISTS idx_device_service_data_history_device '
         'ON device_service_data_history (device_id, seen_at)'
     )
+    histories_db.execute('''
+        CREATE TABLE IF NOT EXISTS device_service_data_bytes (
+            device_id   TEXT PRIMARY KEY,
+            total_bytes INTEGER NOT NULL DEFAULT 0
+        )
+    ''')
+    histories_db.commit()
 
 
 def get_or_create_device_id(address, address_type):
@@ -651,10 +785,12 @@ def record_service_data(device_id, service_data):
             'SELECT 1 FROM device_service_data WHERE device_id = ? AND uuid_id = ?',
             (device_id, uuid_id),
         ).fetchone()
+        n_bytes = len(data_hex) // 2
+        insert_service_data(device_id, uuid_id, data_hex, ts)
         histories_db.execute(
-            'INSERT INTO device_service_data_history '
-            '(device_id, uuid_id, data_hex, seen_at) VALUES (?, ?, ?, ?)',
-            (device_id, uuid_id, data_hex, ts),
+            'INSERT INTO device_service_data_bytes (device_id, total_bytes) VALUES (?, ?) '
+            'ON CONFLICT(device_id) DO UPDATE SET total_bytes = total_bytes + ?',
+            (device_id, n_bytes, n_bytes),
         )
         if row:
             db.execute(
@@ -778,10 +914,7 @@ def record_presence(device_id, rssi):
             (device_id, ts, ts, rssi, rssi, rssi),
         )
         session_id = cur.lastrowid
-    db.execute(
-        'INSERT INTO raw_observations (session_id, device_id, seen_at, rssi) VALUES (?, ?, ?, ?)',
-        (session_id, device_id, ts, rssi),
-    )
+    insert_observation(session_id, device_id, ts, rssi)
 
 
 def record_device(path, props):

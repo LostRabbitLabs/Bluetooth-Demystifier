@@ -6,6 +6,7 @@ import csv
 import datetime
 import glob
 import io
+import itertools
 import os
 import re
 import signal
@@ -22,6 +23,238 @@ DB_PATH = os.path.join(DB_DIR, 'bluetooth.db')
 SETTINGS_DB_PATH = os.path.join(DB_DIR, 'settings.db')
 HISTORIES_DB_PATH = os.path.join(DB_DIR, 'bluetooth_histories.db')
 SETTINGS_BASELINE_DB_PATH = os.path.join(DB_DIR, 'baseline', 'settings_baseline.db')
+
+RAW_DIR = os.path.join(DB_DIR, 'raw')
+SVC_DIR = os.path.join(DB_DIR, 'svc')
+
+_part_alias_counter = itertools.count()
+
+
+def _date_of(ts):
+    if isinstance(ts, datetime.date):
+        return ts
+    return datetime.date.fromisoformat(ts[:10])
+
+
+def _week_start(d):
+    d = _date_of(d)
+    return d - datetime.timedelta(days=d.weekday())
+
+
+def _days_in_range(start, end):
+    d0, d1 = _date_of(start), _date_of(end)
+    if d1 < d0:
+        return []
+    out, cur = [], d0
+    while cur <= d1:
+        out.append(cur)
+        cur += datetime.timedelta(days=1)
+    return out
+
+
+class _Partitions:
+    def __init__(self, directory, file_prefix, table_prefix, create_body, insert_cols):
+        self.dir = directory
+        self.file_prefix = file_prefix
+        self.table_prefix = table_prefix
+        self.create_body = create_body
+        self.insert_cols = insert_cols
+        self.file_re = re.compile(r'^' + file_prefix + r'_(\d{2})-(\d{2})-(\d{4})\.db$')
+        self.table_re = re.compile(r'^' + table_prefix + r'_\d{4}_\d{2}_\d{2}$')
+        self._writers = {}
+
+    def file_name_for(self, d):
+        return '%s_%s.db' % (self.file_prefix, _week_start(d).strftime('%d-%m-%Y'))
+
+    def file_path_for(self, d):
+        return os.path.join(self.dir, self.file_name_for(d))
+
+    def day_table_for(self, d):
+        return '%s_%s' % (self.table_prefix, _date_of(d).strftime('%Y_%m_%d'))
+
+    def _parse_file_date(self, path):
+        m = self.file_re.match(os.path.basename(path))
+        if not m:
+            return None
+        day, month, year = (int(g) for g in m.groups())
+        try:
+            return datetime.date(year, month, day)
+        except ValueError:
+            return None
+
+    def all_files(self):
+        paths = glob.glob(os.path.join(self.dir, '%s_*.db' % self.file_prefix))
+        dated = [(d, p) for p in paths for d in (self._parse_file_date(p),) if d is not None]
+        return [p for _, p in sorted(dated)]
+
+    def files_for_window(self, start, end):
+        if not start or not end:
+            return self.all_files()
+        wanted = {_week_start(d) for d in _days_in_range(start, end)}
+        return [p for p in self.all_files() if self._parse_file_date(p) in wanted]
+
+    def ensure_table(self, conn, table):
+        conn.execute('CREATE TABLE IF NOT EXISTS "%s" (%s)' % (table, self.create_body))
+        conn.execute('CREATE INDEX IF NOT EXISTS "idx_%s_seen" ON "%s"(seen_at)' % (table, table))
+        conn.execute('CREATE INDEX IF NOT EXISTS "idx_%s_dev_seen" ON "%s"(device_id, seen_at)' % (table, table))
+
+    def writer_conn(self, path):
+        conn = self._writers.get(path)
+        if conn is None:
+            os.makedirs(self.dir, exist_ok=True)
+            conn = sqlite3.connect(path, isolation_level=None, timeout=30)
+            conn.execute('PRAGMA journal_mode = WAL')
+            conn.execute('PRAGMA synchronous = NORMAL')
+            self._writers[path] = conn
+        return conn
+
+    def insert(self, seen_at, values):
+        d = _date_of(seen_at)
+        conn = self.writer_conn(self.file_path_for(d))
+        table = self.day_table_for(d)
+        self.ensure_table(conn, table)
+        cols = ', '.join('"%s"' % c for c in self.insert_cols)
+        qs = ', '.join('?' * len(self.insert_cols))
+        conn.execute('INSERT INTO "%s" (%s) VALUES (%s)' % (table, cols, qs), values)
+
+    def close_writers(self):
+        for conn in self._writers.values():
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
+        self._writers.clear()
+
+    def attach(self, conn, path):
+        if not os.path.exists(path):
+            return None
+        alias = 'p%d' % next(_part_alias_counter)
+        try:
+            conn.execute('ATTACH DATABASE ? AS %s' % alias, ('file:%s?mode=ro' % path,))
+        except sqlite3.Error:
+            return None
+        return alias
+
+    def detach(self, conn, alias):
+        try:
+            conn.execute('DETACH DATABASE %s' % alias)
+        except sqlite3.Error:
+            pass
+
+    def day_tables_present(self, conn, alias, wanted_dates):
+        rows = conn.execute(
+            "SELECT name FROM %s.sqlite_master WHERE type='table' AND name LIKE '%s_%%'"
+            % (alias, self.table_prefix)
+        ).fetchall()
+        present = {r[0] for r in rows if self.table_re.match(r[0])}
+        if wanted_dates is None:
+            return sorted(present)
+        return sorted(present & {self.day_table_for(d) for d in wanted_dates})
+
+    def iter_tables(self, conn, start, end, newest_first=False):
+        files = self.files_for_window(start, end)
+        if newest_first:
+            files = list(reversed(files))
+        wanted = _days_in_range(start, end) if (start and end) else None
+        for path in files:
+            alias = self.attach(conn, path)
+            if alias is None:
+                continue
+            try:
+                tables = self.day_tables_present(conn, alias, wanted)
+                if newest_first:
+                    tables = list(reversed(tables))
+                for table in tables:
+                    yield alias, table
+            finally:
+                self.detach(conn, alias)
+
+
+_RAW = _Partitions(
+    RAW_DIR, 'raw', 'raw_obs',
+    'obs_id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, '
+    'device_id TEXT NOT NULL, seen_at TEXT NOT NULL, rssi INTEGER',
+    ('session_id', 'device_id', 'seen_at', 'rssi'),
+)
+_SVC = _Partitions(
+    SVC_DIR, 'svc', 'svc_data',
+    'row_id INTEGER PRIMARY KEY, device_id TEXT NOT NULL, uuid_id INTEGER NOT NULL, '
+    'data_hex TEXT NOT NULL, seen_at TEXT NOT NULL',
+    ('device_id', 'uuid_id', 'data_hex', 'seen_at'),
+)
+
+
+def fetch_points_rows(conn, start, end):
+    """Points-scatter rows over [start, end], shaped and ordered like the legacy
+    POINTS_QUERY (JOIN to global devices, ORDER BY address, seen_at)."""
+    rows = []
+    for alias, table in _RAW.iter_tables(conn, start, end):
+        sql = (
+            'SELECT d.device_id, d.address, d.alias, o.seen_at, o.rssi, '
+            '       d.address_type, d.manufacturerdata_id, d.manufacturerdata_name, '
+            '       d.appearance, d.bearer '
+            'FROM %s."%s" o JOIN devices d ON d.device_id = o.device_id' % (alias, table)
+        )
+        conds, params = [], []
+        if start:
+            conds.append('o.seen_at >= ?')
+            params.append(start)
+        if end:
+            conds.append('o.seen_at <= ?')
+            params.append(end)
+        if conds:
+            sql += ' WHERE ' + ' AND '.join(conds)
+        rows.extend(conn.execute(sql, params).fetchall())
+    rows.sort(key=lambda r: (r[1], r[3]))
+    return rows
+
+
+def fetch_rssi_history(conn, device_id, limit):
+    """Newest ``limit`` non-null RSSI samples for a device, seen_at DESC."""
+    out = []
+    for alias, table in _RAW.iter_tables(conn, None, None, newest_first=True):
+        sql = ('SELECT seen_at, rssi FROM %s."%s" '
+               'WHERE device_id = ? AND rssi IS NOT NULL '
+               'ORDER BY seen_at DESC LIMIT ?' % (alias, table))
+        out.extend(conn.execute(sql, (device_id, limit)).fetchall())
+        if len(out) >= limit:
+            out.sort(key=lambda r: r[0], reverse=True)
+            return out[:limit]
+    out.sort(key=lambda r: r[0], reverse=True)
+    return out[:limit]
+
+
+def fetch_export_observations(conn, device_id):
+    """Every observation for a device, (session_id, seen_at, rssi), seen_at ASC."""
+    out = []
+    for alias, table in _RAW.iter_tables(conn, None, None):
+        sql = ('SELECT session_id, seen_at, rssi FROM %s."%s" '
+               'WHERE device_id = ? ORDER BY seen_at' % (alias, table))
+        out.extend(conn.execute(sql, (device_id,)).fetchall())
+    out.sort(key=lambda r: r[1])
+    return out
+
+
+def fetch_service_data_history(conn, device_id):
+    """(uuid_id, data_hex, seen_at) for a device, seen_at DESC."""
+    out = []
+    for alias, table in _SVC.iter_tables(conn, None, None):
+        sql = ('SELECT uuid_id, data_hex, seen_at FROM %s."%s" '
+               'WHERE device_id = ?' % (alias, table))
+        out.extend(conn.execute(sql, (device_id,)).fetchall())
+    out.sort(key=lambda r: r[2], reverse=True)
+    return out
+
+
+def fetch_service_data_timeline(conn, device_id):
+    """(seen_at, uuid_id, data_hex) for a device, seen_at ASC (CSV export)."""
+    out = []
+    for alias, table in _SVC.iter_tables(conn, None, None):
+        sql = ('SELECT seen_at, uuid_id, data_hex FROM %s."%s" '
+               'WHERE device_id = ?' % (alias, table))
+        out.extend(conn.execute(sql, (device_id,)).fetchall())
+    out.sort(key=lambda r: r[0])
+    return out
 BLUEZ_MONITOR_PATH = os.path.join(SCRIPT_DIR, 'bluez_monitor.py')
 ASSETS_DIR = os.path.join(SCRIPT_DIR, 'data', 'assets')
 DEBUG_MODE = False
@@ -623,11 +856,12 @@ def _service_data_bytes_by_address():
     if not os.path.exists(HISTORIES_DB_PATH):
         return {}
     histories_db = get_histories_db()
-    if not _histories_tables_exist(histories_db):
+    try:
+        bytes_by_device_id = dict(histories_db.execute(
+            'SELECT device_id, total_bytes FROM device_service_data_bytes'
+        ).fetchall())
+    except sqlite3.OperationalError:
         return {}
-    bytes_by_device_id = dict(histories_db.execute(
-        'SELECT device_id, SUM(LENGTH(data_hex) / 2) FROM device_service_data_history GROUP BY device_id'
-    ).fetchall())
     if not bytes_by_device_id:
         return {}
     bytes_by_address = {}
@@ -772,28 +1006,26 @@ def _classifications_by_device(db, settings_db, device_ids, manufacturerdata_id_
 
     uuid_matches = db.execute(
         f'''
-        SELECT device_id, uuid_lookup_id, uuid FROM (
-            SELECT ds.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id, s.uuid AS uuid
-            FROM device_service_uuids ds
-            JOIN service_uuids s ON s.uuid_id = ds.uuid_id
-            WHERE ds.device_id IN ({id_placeholders})
-            UNION
-            SELECT dsol.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id, s.uuid AS uuid
-            FROM device_solicited_uuids dsol
-            JOIN service_uuids s ON s.uuid_id = dsol.uuid_id
-            WHERE dsol.device_id IN ({id_placeholders})
-        )
-        WHERE uuid_lookup_id IS NOT NULL
+        SELECT ds.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id, s.uuid AS uuid
+        FROM device_service_uuids ds
+        JOIN service_uuids s ON s.uuid_id = ds.uuid_id
+        WHERE ds.device_id IN ({id_placeholders})
+        UNION
+        SELECT dsol.device_id AS device_id, s.uuid_lookup_id AS uuid_lookup_id, s.uuid AS uuid
+        FROM device_solicited_uuids dsol
+        JOIN service_uuids s ON s.uuid_id = dsol.uuid_id
+        WHERE dsol.device_id IN ({id_placeholders})
         ''',
         device_ids + device_ids,
     ).fetchall()
     uuid_lookup_by_id = {}
-    referenced_uuid_lookup_ids = {uuid_lookup_id for _, uuid_lookup_id, _ in uuid_matches}
+    referenced_uuid_lookup_ids = {
+        uuid_lookup_id for _, uuid_lookup_id, _ in uuid_matches if uuid_lookup_id is not None
+    }
     if referenced_uuid_lookup_ids:
         uuid_placeholders = ','.join('?' * len(referenced_uuid_lookup_ids))
         for uuid_lookup_id, name, icon in settings_db.execute(
-            f'SELECT uuid_lookup_id, name, icon FROM uuid_lookups '
-            f'WHERE uuid_lookup_id IN ({uuid_placeholders}) AND icon IS NOT NULL',
+            f'SELECT uuid_lookup_id, name, icon FROM uuid_lookups WHERE uuid_lookup_id IN ({uuid_placeholders})',
             list(referenced_uuid_lookup_ids),
         ).fetchall():
             uuid_lookup_by_id[uuid_lookup_id] = (name, icon)
@@ -832,10 +1064,7 @@ def _classifications_by_device(db, settings_db, device_ids, manufacturerdata_id_
             'manufacturer_id': manufacturerdata_id,
         })
     for device_id, uuid_lookup_id, uuid in uuid_matches:
-        entry = uuid_lookup_by_id.get(uuid_lookup_id)
-        if entry is None:
-            continue
-        name, icon = entry
+        name, icon = uuid_lookup_by_id.get(uuid_lookup_id, (None, None))
         rows_by_device[device_id].append({
             'oui': None, 'org_name': None, 'category_id': None,
             'category_name': name, 'category_icon': icon, 'category_color': None,
@@ -1307,16 +1536,6 @@ def points():
 
     start = request.args.get('start')
     end = request.args.get('end')
-    conditions = []
-    params = []
-    if start:
-        conditions.append('o.seen_at >= ?')
-        params.append(start)
-    if end:
-        conditions.append('o.seen_at <= ?')
-        params.append(end)
-    where_clause = ('WHERE ' + ' AND '.join(conditions)) if conditions else ''
-    query = POINTS_QUERY.format(where_clause=where_clause)
 
     filter_groups, not_equals = _parse_query_filter()
     top_n = _parse_top_n()
@@ -1329,7 +1548,7 @@ def points():
     alias_search_text_by_device = _alias_search_text_by_device()
     db = get_db()
     settings_db = get_settings_db()
-    rows = db.execute(query, params).fetchall()
+    rows = fetch_points_rows(db, start, end)
     manufacturerdata_id_by_device = {r[0]: r[6] for r in rows}
     classifications_by_device = _classifications_by_device(
         db, settings_db, manufacturerdata_id_by_device.keys(), manufacturerdata_id_by_device,
@@ -1469,7 +1688,7 @@ def _service_uuid_labels(db, settings_db, uuid_ids):
         for uuid_id, uuid, lookup_id in rows
     }
 
-OBSERVATION_COUNT_QUERY = 'SELECT COUNT(*) FROM raw_observations WHERE device_id = ?'
+OBSERVATION_COUNT_QUERY = 'SELECT SUM(obs_count) FROM device_appearances WHERE device_id = ?'
 
 DEVICE_RSSI_QUERY = '''
     SELECT rssi_last, rssi_best, rssi_avg, obs_count
@@ -1515,7 +1734,7 @@ def device_detail(address):
     if os.path.exists(HISTORIES_DB_PATH) and _histories_tables_exist(get_histories_db()):
         histories_db = get_histories_db()
         alias_history_rows = histories_db.execute(ALIAS_HISTORY_QUERY, (device_id, ALIAS_HISTORY_LIMIT)).fetchall()
-        service_data_history_rows = histories_db.execute(SERVICE_DATA_HISTORY_QUERY, (device_id,)).fetchall()
+        service_data_history_rows = fetch_service_data_history(histories_db, device_id)
     else:
         alias_history_rows = []
         service_data_history_rows = []
@@ -1542,7 +1761,7 @@ def device_detail(address):
         'bearer': bearer,
         'first_seen_at': first_seen_at,
         'last_seen_at': last_seen_at,
-        'observation_count': db.execute(OBSERVATION_COUNT_QUERY, (device_id,)).fetchone()[0],
+        'observation_count': db.execute(OBSERVATION_COUNT_QUERY, (device_id,)).fetchone()[0] or 0,
         'rssi': _device_rssi_stats(db, device_id),
         'tags': [row[0] for row in get_settings_db().execute(DEVICE_TAGS_QUERY, (address,)).fetchall()],
         'classifications': [
@@ -1557,7 +1776,7 @@ def device_detail(address):
         ],
         'rssi_history': [
             {'seen_at': seen_at, 'rssi': rssi}
-            for seen_at, rssi in db.execute(RSSI_HISTORY_QUERY, (device_id, RSSI_HISTORY_LIMIT)).fetchall()
+            for seen_at, rssi in fetch_rssi_history(db, device_id, RSSI_HISTORY_LIMIT)
         ],
         'service_uuids': [
             {'uuid': uuid, 'name': uuid_names_and_types.get(lookup_id, (None, None, None))[0],
@@ -1653,7 +1872,7 @@ def device_export_csv(address):
     oui_org_row = settings_db.execute('SELECT org_name FROM ouids WHERE oui = ? LIMIT 1', (oui_key,)).fetchone()
     oui_label = f'{oui_org_row[0]} ({oui_display})' if oui_org_row else f'Unknown ({oui_display})'
 
-    observations = db.execute(EXPORT_OBSERVATIONS_QUERY, (device_id,)).fetchall()
+    observations = fetch_export_observations(db, device_id)
 
     sessions = db.execute(EXPORT_SESSIONS_QUERY, (device_id,)).fetchall()
     session_window = {session_id: (start, end) for session_id, start, end in sessions}
@@ -1678,7 +1897,7 @@ def device_export_csv(address):
         histories_db = get_histories_db()
         alias_timeline = histories_db.execute(ALIAS_TIMELINE_QUERY, (device_id,)).fetchall()
         mfr_timeline = histories_db.execute(MANUFACTURERDATA_TIMELINE_QUERY, (device_id,)).fetchall()
-        service_data_rows = histories_db.execute(SERVICE_DATA_TIMELINE_QUERY, (device_id,)).fetchall()
+        service_data_rows = fetch_service_data_timeline(histories_db, device_id)
     else:
         alias_timeline, mfr_timeline, service_data_rows = [], [], []
 
